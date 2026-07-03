@@ -29,9 +29,9 @@ async function analyzeImage(buffer, mime, params) {
 Return STRICT JSON:
 {"category":"product_hero|lifestyle|text_graphic|leave","hasText":true/false,"textItems":["readable words/phrases, verbatim"],"brandOnImage":true/false,"note":"short"}
 - category:
-  • "product_hero" = a clean studio/catalog shot of the product or its packaging (bottle, box, tube, jar, blister) isolated on a plain/simple background — the main product being sold, by itself.
+  • "product_hero" = the product being sold or its packaging (bottle, box, tube, jar, blister, sachet) shown clearly — whether isolated on a plain background OR inside a certificate/document/badge layout (a CE/ISO conformity certificate that PICTURES the product jar/box still counts as product_hero, because the product itself is visible and should be swapped to the new offer).
   • "lifestyle" = a real photograph of a person or scene holding/using the product (testimonial / review / UGC style). Keep it real.
-  • "text_graphic" = a graphic, banner, badge or seal whose main content is TEXT (headline, discount %, guarantee, feature list) — not a real product photo.
+  • "text_graphic" = a PURE text graphic with NO visible product — a banner, headline, discount %, feature list, guarantee text, or a certificate/document that is TEXT-ONLY (no product photo on it). If the image shows the actual product package, classify it as product_hero, NOT text_graphic.
   • "leave" = decorative element, icon, logo, background, arrow, a person WITHOUT the product, an anatomical/medical diagram, first-aid/cross symbol, or anything with no translatable words and no product/brand.
 - hasText / textItems: readable WORDS (ignore pure numbers/symbols like "100%").
 - brandOnImage: does a product/brand NAME appear anywhere on it? true/false.

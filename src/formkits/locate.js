@@ -93,37 +93,57 @@ function findLeadForm(doc) {
 // Find the smallest region that contains the form AND (optionally) a funnel
 // block that is an ancestor or sibling-within-common-section. We prefer to
 // replace the funnel + form together when they share a wrapping section.
+//
+// Even when there is NO funnel (a plain form on a page), we still want to
+// replace the whole "form wrapper" — the container that holds the order form
+// TOGETHER with its price/title/coupon markup (e.g. .pachinoform, .order_block,
+// .form-wrap). Replacing only the <form> leaves the old price/title above the
+// kit, which looks broken ("price floating above the boxes"). So we also expand
+// to the nearest ancestor whose class/id marks it as an order-form wrapper.
+const FORM_WRAPPER_RE = /\b(?:pachinoform|order[-_]?(?:block|form|wrap|section|box)|lead[-_]?form|orderform|form[-_]?wrap|submit[-_]?form|cform|main[-_]?form)\b/i;
+
+function nodeHasFunnel(node) {
+  let has = false;
+  (function walk(n) {
+    if (has) return;
+    const cls = getAttr(n, 'class') || '';
+    const id = getAttr(n, 'id') || '';
+    if (FUNNEL_CLASSES.some(c => cls.split(/\s+/).includes(c) || id === c)) { has = true; return; }
+    for (const c of (n.childNodes || [])) walk(c);
+  })(node);
+  return has;
+}
+
 function findRegion(form) {
   // The form's own span:
   const formLoc = form.sourceCodeLocation;
   if (!formLoc) return null;
   let start = formLoc.startOffset, end = formLoc.endOffset;
 
-  // Walk up ancestors looking for a wrapping element that also contains a
-  // funnel-root node. If found, expand the region to that ancestor's span
-  // (replaces game + form as one unit).
+  // Walk up ancestors. Expand the region to an ancestor that EITHER (a) also
+  // contains a funnel-root block (game + form as one unit), OR (b) is itself a
+  // named order-form wrapper (so the old price/title/coupon above the form are
+  // replaced together with the form, not left dangling above the kit).
+  let wrapperFound = false;
   let node = form.parentNode;
   while (node) {
     const loc = node.sourceCodeLocation;
     const tag = node.tagName;
-    // Stop at document/fragment roots.
     if (!tag) break;
-    // Does this subtree contain a funnel root?
-    let hasFunnel = false;
-    (function walk(n) {
-      if (hasFunnel) return;
-      const cls = getAttr(n, 'class') || '';
-      const id = getAttr(n, 'id') || '';
-      if (FUNNEL_CLASSES.some(c => cls.split(/\s+/).includes(c) || id === c)) { hasFunnel = true; return; }
-      for (const c of (n.childNodes || [])) walk(c);
-    })(node);
-    if (hasFunnel && loc) {
-      // Only adopt this ancestor if it is a "section"-ish wrapper, to avoid
-      // swallowing the whole <body>. Limit to common section containers.
-      if (/^(section|div|main|article)$/i.test(tag)) {
-        start = loc.startOffset;
-        end = loc.endOffset;
-      }
+    if (!/^(section|div|main|article)$/i.test(tag)) { node = node.parentNode; continue; }
+    const cls = getAttr(node, 'class') || '';
+    const id = getAttr(node, 'id') || '';
+    const isWrapper = FORM_WRAPPER_RE.test(cls) || FORM_WRAPPER_RE.test(id);
+    const hasFunnel = nodeHasFunnel(node);
+    if ((hasFunnel || isWrapper) && loc) {
+      start = loc.startOffset;
+      end = loc.endOffset;
+      wrapperFound = true;
+      // Once we adopt a named form-wrapper, stop — going higher risks
+      // swallowing the whole <body>. A funnel match can still climb one more
+      // level in case the wrapper itself is nested, but a wrapper match is a
+      // hard stop.
+      if (isWrapper) break;
     }
     node = node.parentNode;
   }

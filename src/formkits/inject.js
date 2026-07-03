@@ -177,7 +177,13 @@ function injectFormKit(siteRoot, params, offerPhotos) {
   const action = {
     discount: params.discount || '',
     offerName: params.offerName || '',
-    actionFromOriginal: contract.action
+    actionFromOriginal: contract.action,
+    // Price fields the kit's __NEW_PRICE__/__OLD_PRICE__ markers depend on.
+    // Without these the kit form shows an empty price line (a blank crossed-out
+    // span and a blank bold price) even when the buyer set oldPrice/newPrice.
+    oldPrice: params.oldPrice || '',
+    newPrice: params.newPrice || '',
+    currency: params.currency || ''
   };
   let rendered = renderKit(id, kitHtml, assetInfo.urlBase, action, contract.hidden);
 

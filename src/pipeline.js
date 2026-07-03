@@ -168,10 +168,16 @@ async function runJob(job) {
         imagesToDo = referenced;
       }
     }
+    // Detect images that sit INSIDE a review/testimonial/comments block (by
+    // scanning the source HTML for <img> within .comments__item / .review /
+    // .otzyv etc.). Such photos must NEVER be flat-replaced with the offer pack
+    // — they are user-generated review photos and must stay alive (brand-edit
+    // in place). Filename heuristics miss numeric names like 108.jpg.
+    const reviewImages = collectReviewImages(all, siteRoot);
     if (offerPhotos.length) log(id, 'progress', `Загружено фото оффера: ${offerPhotos.length} — продуктовые изображения будут заменены`);
     if (job.params.translateImages !== false && imagesToDo.length) {
       log(id, 'step', 'Переводим и подгоняем картинки…');
-      await processImages(id, imagesToDo, siteRoot, backupDir, job.params, brief, report, offerPhotos);
+      await processImages(id, imagesToDo, siteRoot, backupDir, job.params, brief, report, offerPhotos, reviewImages);
     } else {
       log(id, 'progress', 'Картинки пропущены (отключено).');
     }
@@ -359,7 +365,7 @@ async function applyAndVerifyFile(id, pf, translations, params, brief, backupDir
   report.files.push(rec);
 }
 
-async function processImages(id, imageFiles, siteRoot, backupDir, params, brief, report, offerPhotos) {
+async function processImages(id, imageFiles, siteRoot, backupDir, params, brief, report, offerPhotos, reviewImages) {
   // group png/webp/jpg siblings by dir+basename(no ext)
   const groups = new Map();
   for (const f of imageFiles) {
@@ -419,7 +425,14 @@ async function processImages(id, imageFiles, siteRoot, backupDir, params, brief,
     const rec = { relpath: primary.relpath, changed: false, reason: analysis.note || '', category: analysis.category };
     const hasWords = (analysis.textItems || []).some(t => /\p{L}{2,}/u.test(String(t)));
     // Review/testimonial images stay "alive" — always edit in place, never flat-replace.
-    const isReviewImg = /otz|otziv|otzyv|review|testimon|feedback|foto|photo\d/i.test(primary.relpath);
+    // Detect by BOTH filename heuristic AND DOM context (image sits inside a
+    // .comments__item / .review / .otzyv block) — the DOM check catches numeric
+    // names like 108.jpg that the filename regex misses.
+    const reviewSet = reviewImages || new Set();
+    const relPosix = primary.relpath.split(path.sep).join('/');
+    const isReviewImg = /otz|otziv|otzyv|review|testimon|feedback|foto|photo\d/i.test(primary.relpath)
+      || reviewSet.has(relPosix)
+      || reviewSet.has(path.basename(relPosix));
 
     // product_hero (clean isolated product shot): replace with the buyer's real
     // offer photo when provided — the only case where flat replacement is right.
@@ -531,6 +544,55 @@ function backupFile(abspath, relpath, backupDir) {
     fs.mkdirSync(path.dirname(bpath), { recursive: true });
     if (!fs.existsSync(bpath)) fs.copyFileSync(abspath, bpath);
   } catch { /* noop */ }
+}
+
+// Scan the site's HTML/PHP for <img> that lives INSIDE a review/testimonial/
+// comments block, and return the set of their relative paths (posix). Such
+// photos are user-generated and must NEVER be flat-replaced with the offer
+// studio pack — the filename-only heuristic in processImages misses numeric
+// names (108.jpg). We detect the enclosing review container by class.
+const REVIEW_CONTAINER_RE = /class="[^"]*\b(comments?(?:__\w+)?|reviews?(?:__\w+)?|otzyv\w*|otz\w*|testimon\w*|feedback|recalls?|client[-_]?(?:photo|review|comment))\b[^"]*"/i;
+function collectReviewImages(allFiles, siteRoot) {
+  const out = new Set();
+  const htmlFiles = allFiles.filter(f => /\.(html?|php|phtml)$/i.test(f.relpath));
+  for (const f of htmlFiles) {
+    let src;
+    try { src = fs.readFileSync(f.abspath, 'utf8'); } catch { continue; }
+    // Walk: split by review-container opening tags; for each container, grab
+    // the imgs up to the matching close (best-effort depth count on the
+    // container tag). Cheaper than a full parse and good enough here.
+    const re = /<(\w+)[^>]*class="[^"]*\b(?:comments?(?:__\w+)?|reviews?(?:__\w+)?|otzyv\w*|otz\w*|testimon\w*|feedback|recalls?|client[-_]?(?:photo|review|comment))\b[^"]*"[^>]*>/gi;
+    let m;
+    while ((m = re.exec(src))) {
+      const tag = m[1];
+      const blockStart = m.index;
+      // find matching close by depth counting this tag
+      let depth = 1, pos = m.index + m[0].length;
+      const openRe = new RegExp('<' + tag + '\\b', 'gi');
+      const closeRe = new RegExp('</' + tag + '\\s*>', 'gi');
+      while (depth > 0 && pos < src.length) {
+        openRe.lastIndex = pos;
+        closeRe.lastIndex = pos;
+        const o = openRe.exec(src);
+        const c = closeRe.exec(src);
+        if (c === null) break;
+        if (o !== null && o.index < c.index) { depth++; pos = o.index + o[0].length; }
+        else { depth--; pos = c.index + c[0].length; }
+      }
+      const block = src.slice(blockStart, pos);
+      // collect img src within this review block
+      const imgRe = /<img[^>]+src="([^"]+)"|<img[^>]+src='([^']+)'/gi;
+      let im;
+      while ((im = imgRe.exec(block))) {
+        let p = (im[1] || im[2] || '').trim();
+        if (!p || /^data:/i.test(p)) continue;
+        // normalise to posix relative (strip leading ./ ../ and query/hash)
+        p = p.replace(/[?#].*$/, '');
+        out.add(p.split('/').filter(x => x && x !== '.').join('/'));
+      }
+    }
+  }
+  return out;
 }
 
 module.exports = { runJob };
