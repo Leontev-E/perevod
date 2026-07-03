@@ -21,10 +21,17 @@ const config = {
     // text agent — Anthropic messages flavored
     claudeUrl: 'https://api.kie.ai/claude/v1/messages',
     claudeModel: process.env.KIE_CLAUDE_MODEL || 'claude-sonnet-5',
+    // stronger model, tried on the hardest single fragments Sonnet 5 can't
+    // resolve (quality tier). Empty string disables it. (verified id on kie.ai)
+    claudeStrongModel: process.env.KIE_CLAUDE_STRONG_MODEL || 'claude-opus-4-7',
     // image jobs
     createTaskUrl: 'https://api.kie.ai/api/v1/jobs/createTask',
     recordInfoUrl: 'https://api.kie.ai/api/v1/jobs/recordInfo',
     imageModel: process.env.KIE_IMAGE_MODEL || 'gpt-image-2-image-to-image',
+    // ordered, less-censored image fallbacks tried when GPT Image 2 fails/refuses.
+    // Grok first (uncensored + clean Cyrillic), then Flux-2 as a last resort.
+    imageFallbacks: (process.env.IMAGE_FALLBACK_MODELS || 'grok-imagine/image-to-image,flux-2/pro-image-to-image')
+      .split(',').map(s => s.trim()).filter(Boolean),
     // file upload (note: this host lives behind Cloudflare and blocks non-browser UAs)
     uploadUrl: 'https://kieai.redpandaai.co/api/file-base64-upload',
     userAgent: 'Mozilla/5.0 (perevod.boostclicks.ru)'

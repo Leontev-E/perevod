@@ -108,10 +108,12 @@ async function callGpt(batch, params, brief) {
   return collect(obj, batch);
 }
 
-// Less-censored chat-completion fallbacks (Grok/DeepSeek). Model ids are tried in
+// Less-censored chat-completion fallbacks (DeepSeek). Model ids are tried in
 // order; unavailable/maintenance models simply throw and are skipped. Env override:
-// TEXT_FALLBACK_MODELS="deepseek-chat,grok-3".
-const CHAT_FALLBACKS = (process.env.TEXT_FALLBACK_MODELS || 'deepseek-chat').split(',').map(s => s.trim()).filter(Boolean);
+// TEXT_FALLBACK_MODELS="deepseek-chat,deepseek-reasoner". (Note: Grok has no chat
+// endpoint on kie.ai — "Operation not found" — so it is NOT a text fallback; it is
+// used only for images. Opus 4.7 is wired separately as a strong single-fragment tier.)
+const CHAT_FALLBACKS = (process.env.TEXT_FALLBACK_MODELS || 'deepseek-chat,deepseek-reasoner').split(',').map(s => s.trim()).filter(Boolean);
 async function callChatModel(model, batch, params, brief) {
   const b = brief || {}; const lr = b.localeRules || {};
   const payload = batch.map(u => ({ id: u.gid, text: u.text }));
@@ -146,14 +148,20 @@ function singleSysRepair(params, brief) {
     `Render the product as "${params.offerName}". Keep any KIEPHP<digits>ENDK tokens, {vars}, HTML tags/entities and URLs exactly.`;
 }
 
-// Translate one fragment as plain text, trying two framings. Returns text or null.
+// Translate one fragment as plain text. First Sonnet 5 (two framings), then the
+// stronger model (Opus 4.7) on the hardest fragments Sonnet mangles/declines.
+// Returns text or null.
 async function callClaudeSingle(unit, params, brief) {
-  for (const mk of [singleSysNeutral, singleSysRepair]) {
-    try {
-      const { text } = await kie.claude({ system: mk(params, brief), messages: [{ role: 'user', content: unit.text }], maxTokens: 2000, temperature: 0.2 });
-      const t = (text || '').trim();
-      if (t && !isRefusal(t)) return t;
-    } catch { /* try next framing */ }
+  const strong = cfg.kie.claudeStrongModel;
+  const models = strong ? [null, strong] : [null];   // Sonnet 5 first, then Opus tier
+  for (const model of models) {
+    for (const mk of [singleSysNeutral, singleSysRepair]) {
+      try {
+        const { text } = await kie.claude({ system: mk(params, brief), messages: [{ role: 'user', content: unit.text }], maxTokens: 2000, temperature: 0.2, model });
+        const t = (text || '').trim();
+        if (t && !isRefusal(t)) return t;
+      } catch { /* try next framing / model */ }
+    }
   }
   return null;
 }

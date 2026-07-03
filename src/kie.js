@@ -56,8 +56,8 @@ function authHeaders(extra = {}) {
 
 // ---- Claude Sonnet 5 (text + optional images) ---------------------------------
 // messages: [{role:'user'|'assistant', content: string | [blocks]}]
-async function claude({ system, messages, maxTokens = 8000, temperature }) {
-  const body = { model: cfg.kie.claudeModel, max_tokens: maxTokens, messages };
+async function claude({ system, messages, maxTokens = 8000, temperature, model }) {
+  const body = { model: model || cfg.kie.claudeModel, max_tokens: maxTokens, messages };
   if (system) body.system = system;
   if (typeof temperature === 'number') body.temperature = temperature;
   const json = await fetchJson(cfg.kie.claudeUrl, {
@@ -224,6 +224,31 @@ async function grokEditImage({ prompt, inputUrl }) {
   return { url: r.urls[0], credits: r.credits };
 }
 
+// Generic less-censored image editor for the fallback chain (Grok / Flux-2 /
+// Nano-Banana). Each family wants a slightly different input shape; we route by
+// model prefix. Uses the same jobs/createTask + recordInfo polling flow.
+async function editImageFallback(model, { prompt, inputUrl, aspectRatio = 'auto' }) {
+  let input;
+  if (/^grok/i.test(model)) {
+    input = { prompt, image_urls: [inputUrl], nsfw_checker: false };
+  } else if (/nano-banana/i.test(model)) {
+    input = { prompt, input_urls: [inputUrl], output_format: 'png', nsfw_checker: false };
+  } else {
+    // flux-2/pro-image-to-image and other input_urls-style editors. Use "auto"
+    // aspect_ratio: each editor allows a different ratio set, and the result is
+    // refit to the original pixel dims anyway, so "auto" is the safe universal choice.
+    input = { prompt, input_urls: [inputUrl], aspect_ratio: 'auto', resolution: '1K', nsfw_checker: false };
+  }
+  const json = await fetchJson(cfg.kie.createTaskUrl, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ model, input })
+  }, { retries: 2, timeoutMs: 120000 });
+  const taskId = json && json.data && (json.data.taskId || json.data.recordId);
+  if (!taskId) throw new Error(model + ': no taskId ' + JSON.stringify(json).slice(0, 160));
+  const r = await pollImageTask(taskId, { timeoutMs: 300000, intervalMs: 4000 });
+  if (!r.urls || !r.urls.length) throw new Error(model + ': no result url');
+  return { url: r.urls[0], credits: r.credits, via: model };
+}
+
 async function downloadBuffer(url, { timeoutMs = 120000 } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -301,6 +326,6 @@ function extractJson(text) {
 
 module.exports = {
   claude, claudeJson, gpt, gptJson, orchestrateJson, chatCompletion,
-  uploadBase64, createImageTask, pollImageTask, grokEditImage, downloadBuffer,
+  uploadBase64, createImageTask, pollImageTask, grokEditImage, editImageFallback, downloadBuffer,
   extractJson, fetchJson
 };

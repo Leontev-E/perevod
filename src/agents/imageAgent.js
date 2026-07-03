@@ -95,11 +95,18 @@ keepScene +
     resultUrl = r.urls[0]; credits = r.credits || 0;
     resultBuf = await kie.downloadBuffer(resultUrl);
   } catch (e1) {
-    // Grok fallback (uncensored, clean Cyrillic) — single image only, so it
-    // relabels the scene rather than compositing.
-    const g = await kie.grokEditImage({ prompt: instruction.replace(/SECOND image/g, 'reference'), inputUrl: url });
-    resultUrl = g.url; credits = g.credits || 0; via = 'grok';
-    resultBuf = await kie.downloadBuffer(resultUrl);
+    // Less-censored fallback chain (Grok → Flux-2 …). Single input image, so
+    // these relabel the scene rather than compositing. First one that works wins.
+    const fbPrompt = instruction.replace(/SECOND image/g, 'reference');
+    let lastErr = e1, done = false;
+    for (const model of cfg.kie.imageFallbacks) {
+      try {
+        const g = await kie.editImageFallback(model, { prompt: fbPrompt, inputUrl: url, aspectRatio: aspect });
+        resultUrl = g.url; credits = g.credits || 0; via = g.via;
+        resultBuf = await kie.downloadBuffer(resultUrl); done = true; break;
+      } catch (e2) { lastErr = e2; }
+    }
+    if (!done) throw lastErr;
   }
 
   const finalBuf = await refit(resultBuf, dims);
