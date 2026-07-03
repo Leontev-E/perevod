@@ -20,7 +20,12 @@ const SEED = [
   { scope: 'image', rule: 'Write on-image text strictly in the TARGET language (not the local ethnic language) and keep the exact original dimensions.' },
   { scope: 'files', rule: 'Never run non-HTML assets through the HTML pipeline, incl. mirror-suffixed files like x.css.html / x.svg.html / x.png.html / font.eot.html.' },
   { scope: 'files', rule: 'Never touch api.php / error.php / success.php or the success/ error/ dictionary folders.' },
-  { scope: 'structure', rule: 'Any edit (translation, geo-form, discount) must preserve the DOM skeleton; if it would change tags/structural attributes, roll it back.' }
+  { scope: 'structure', rule: 'Any edit (translation, geo-form, discount) must preserve the DOM skeleton; if it would change tags/structural attributes, roll it back.' },
+  // Learned from a 37-offer training sweep (2026-07-03):
+  { scope: 'structure', rule: 'When a form kit replaces the lead form, the order form is hidden until the kit game is played. The render-check must click the kit game element (.door-face / .spin-button / medboxes .box) before testing form visibility, otherwise a working kit looks broken.' },
+  { scope: 'structure', rule: 'When a form kit replaces the lead form, the host page own JS often errors (Cannot read/set properties of null on .style/.textContent) because its old form/quiz targets are gone. This is expected swap noise, not a kit defect: funnel-depth changes and stale-ref JS errors are not regressions when a kit is in play; only flag a regression if the kit form itself is unreachable.' },
+  { scope: 'text', rule: 'The same person can appear in several inflected/partial forms on a landing (e.g. "Jan Kowalski", "Kowalski", "dr Kowalski", "panem Janem Kowalskim"). The name glossary must GROUP all forms of one person into ONE canonical localized name, so a recurring doctor/testimonial author is never shown with two different names across the page.' },
+  { scope: 'files', rule: 'When injecting a form kit, every hidden field of the original lead form must be carried over (sub1-5 plus any extras: price, country, goodID, flow, offer, subid, pay). Dropping a tracking/billing field silently breaks the lead pipeline.' }
 ];
 
 function load() {

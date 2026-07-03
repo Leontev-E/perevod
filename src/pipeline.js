@@ -185,7 +185,7 @@ async function runJob(job) {
       const oroot = extractZip(path.join(dir, 'upload.zip'), origTmp);
       const ro = await renderCheck(oroot, path.join(dir, 'render_orig.png'));
       const rt = await renderCheck(siteRoot, path.join(dir, 'render_out.png'));
-      renderVerdict = compareRenders(ro, rt);
+      renderVerdict = compareRenders(ro, rt, { formKit: !!job.params.formKit });
       try { fs.rmSync(origTmp, { recursive: true, force: true }); } catch { /* noop */ }
       if (renderVerdict.verdict === 'regression') {
         log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify({ newErrors: renderVerdict.newErrors, funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles, formLost: renderVerdict.formLost }).slice(0, 220)}`);

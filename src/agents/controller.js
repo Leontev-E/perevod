@@ -125,14 +125,14 @@ async function buildBrief(params, sampleTexts, imageNames) {
   return { localeRules, sourceOfferNames, sourceLanguageGuess: '', glossary, notes: '' };
 }
 
-// Find recurring personal names in the source and assign each ONE consistent
-// localized name for the target GEO, so the same doctor/testimonial author is
-// rendered identically everywhere. Returns { "Source Name": "Localized Name" }.
+// Collect candidate person-name mentions across the source text. We gather ALL
+// name-shaped mentions (not just exact repeats) because the same person often
+// appears in different inflected/partial forms (Polish "Jan Kowalski" vs
+// instrumental "Frankiem Lindnerem"; "Dr. Komil" vs just "Komil" in dialogue).
+// The grouping into persons is done by the LLM below; here we only seed it.
 function candidatePersonNames(texts) {
   const freq = new Map();
-  // Two Title-case words (first + last), Latin or Cyrillic, allowing diacritics,
-  // apostrophes and hyphens. Same shape we use in looksLikePersonName above.
-  const re = /\b(\p{Lu}[\p{Ll}'’.-]+)\s+(\p{Lu}[\p{Ll}'’.-]+)\b/gu;
+  const re = /\b(\p{Lu}[\p{Ll}'’.\u0300-\u036f-]+)\s+(\p{Lu}[\p{Ll}'’.\u0300-\u036f-]+)\b/gu;
   for (const t of texts || []) {
     const s = String(t);
     let m;
@@ -143,28 +143,38 @@ function candidatePersonNames(texts) {
       freq.set(name, (freq.get(name) || 0) + 1);
     }
   }
-  // Only names that RECUR (>=2) are worth pinning — a one-off name has nothing
-  // to be inconsistent with, and the model already localizes it per-fragment.
-  return [...freq.entries()].filter(([, v]) => v >= 2)
-    .sort((a, b) => b[1] - a[1]).slice(0, 12).map(([n]) => n);
+  // Return distinct mentions sorted by frequency. We no longer require >=2
+  // exact repeats: a single inflected form still matters if the LLM groups it
+  // with others as the same person.
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([n]) => n);
 }
 
 async function buildNameGlossary(sampleTexts, localeRules, params) {
-  const names = candidatePersonNames(sampleTexts);
-  if (!names.length) return {};
+  const mentions = candidatePersonNames(sampleTexts);
+  if (!mentions.length) return {};
   const examples = (localeRules && localeRules.nameExamples) || [];
+  // Ask the LLM to (1) GROUP mentions that refer to the SAME person (handles
+  // inflections, partial mentions, titles) and (2) give each person ONE
+  // localized name. This defeats the "same doctor, two names" inconsistency.
   const input =
-`These are recurring personal names found on a website. Give each ONE consistent localized name as used by real people in ${params.country}.
-Use names typical of ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''} — keep the person's role/sense, you may adapt the name to local naming customs. Output strictly the localized full name, nothing else per item.
-Return strict JSON: {"names":[{"source":"<original name>","target":"<localized ${langDirective(params)} name>"}]}
-Names: ${JSON.stringify(names)}`;
+`These are personal-name mentions scraped from a website (a landing page). Several may refer to the SAME person in different forms/inflections (e.g. "Jan Kowalski", "J. Kowalski", "Kowalski", "panem Janem Kowalskim"; "Dr. Ahmed", "Ahmed"). Group mentions that are the same person, and assign each PERSON exactly ONE localized name as used by real people in ${params.country}.
+Use names typical of ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''} — keep the person's role/sense, you may adapt to local naming customs. Skip mentions that are clearly not a person (companies, place names, greetings, product words).
+Mentions: ${JSON.stringify(mentions)}
+Return strict JSON: {"persons":[{"mentions":["<original mention(s)>"],"target":"<ONE localized ${langDirective(params)} name>"}]}`;
   const { obj } = await kie.orchestrateJson({ instructions: 'You assign localized personal names and output JSON only. Never refuse.', input, effort: 'low' });
-  const list = (obj && Array.isArray(obj.names)) ? obj.names : [];
+  const list = (obj && Array.isArray(obj.persons)) ? obj.persons : (obj && Array.isArray(obj.names) ? obj.names : []);
   const out = {};
   for (const item of list) {
-    const src = item && typeof item.source === 'string' ? item.source.trim() : '';
     const tgt = item && typeof item.target === 'string' ? item.target.trim() : '';
-    if (src && tgt && !REFUSAL_RE.test(tgt)) out[src] = tgt;
+    if (!tgt || REFUSAL_RE.test(tgt)) continue;
+    // New grouped format: {"mentions":[...], "target":"..."}. Map EVERY mention
+    // form to the single target so all inflections/partial forms translate to
+    // one consistent name. Fall back to legacy {"source","target"} shape.
+    const mentions = Array.isArray(item.mentions) ? item.mentions : (item.source ? [item.source] : []);
+    for (const m of mentions) {
+      const src = String(m || '').trim();
+      if (src) out[src] = tgt;
+    }
   }
   return out;
 }
