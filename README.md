@@ -22,14 +22,14 @@ Text, prices, forms and images are adapted — the layout stays intact.
 
 You upload a ZIP of a landing page and a few parameters (country, language, currency, offer name, prices, discount). Perevod returns a ready-to-launch ZIP **and** a live preview:
 
-- 🗣 **Human translation & localization** — not word-for-word: cities, reviewer names, phone codes and the whole tone are adapted to the target GEO.
-- 🏷 **Offer swap** — the old product/brand is replaced by your offer name everywhere: body text, form fields, `<meta>` and even on images.
-- 💰 **Prices & discounts** — updated in text, in forms and inside JS promo logic (spinners, "pick a door", timers). Free-mode (0 / 100 %) is handled without "free + discount" contradictions.
-- 🖼 **Images** — text banners are re-drawn in the target language; product shots can be replaced with your own offer photos; real review/lifestyle photos are edited (the new package composited in) so the page stays alive.
-- 🧱 **Never breaks the layout** — the DOM skeleton is diffed before/after; any edit that would change the structure is rolled back automatically.
-- 🌐 **Writing systems** — pick Cyrillic / Latin / Arabic for languages that use several (Uzbek, Kazakh, Serbian…).
-- 🧠 **Self-improving** — the orchestrator keeps a growing list of "house rules" learned from past jobs.
-- ✅ **Real-browser check** — the result is rendered in a headless browser and compared to the original (funnel depth, forms, new JS errors).
+- **Human translation & localization** — not word-for-word: cities, reviewer names, phone codes and the whole tone are adapted to the target GEO.
+- **Offer swap** — the old product/brand is replaced by your offer name everywhere: body text, form fields, `<meta>` and even on images.
+- **Prices & discounts** — updated in text, in forms and inside JS promo logic (spinners, "pick a door", timers). Free-mode (0 / 100 %) is handled without "free + discount" contradictions.
+- **Images** — text banners are re-drawn in the target language; product shots can be replaced with your own offer photos; real review/lifestyle photos are edited (the new package composited in) so the page stays alive.
+- **Never breaks the layout** — the DOM skeleton is diffed before/after; any edit that would change the structure is rolled back automatically.
+- **Writing systems** — pick Cyrillic / Latin / Arabic for languages that use several (Uzbek, Kazakh, Serbian…).
+- **Self-improving** — the orchestrator keeps a growing list of "house rules" learned from past jobs.
+- **Real-browser check** — the result is rendered in a headless browser and compared to the original (funnel depth, forms, new JS errors).
 
 > It never touches your backend: `api.php`, `error.php`, `success.php` and the `success/` `error/` dictionary folders are left exactly as they are.
 
