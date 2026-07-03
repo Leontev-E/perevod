@@ -1,0 +1,10 @@
+services:
+  perevod:
+    build: .
+    container_name: perevod-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8070}:3000"
+    env_file: .env
+    volumes:
+      - ./data:/data

@@ -1,0 +1,30 @@
+{
+  "name": "perevod",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI landing localizer (perevod.boostclicks.ru) — multi-agent via kie.ai",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "acorn": "^8.12.1",
+    "acorn-walk": "^8.3.4",
+    "adm-zip": "^0.5.16",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "iconv-lite": "^0.6.3",
+    "magic-string": "^0.30.11",
+    "multer": "^1.4.5-lts.1",
+    "nanoid": "^3.3.7",
+    "p-limit": "^3.1.0",
+    "parse5": "^7.2.1",
+    "puppeteer-core": "^23.11.1",
+    "sharp": "^0.33.5"
+  }
+}

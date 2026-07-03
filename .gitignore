@@ -1,0 +1,23 @@
+# secrets & runtime state
+.env
+data/
+uploads/
+jobs/
+
+# node
+node_modules/
+npm-debug.log*
+
+# proprietary / large sample content (never publish client landings)
+samples/
+*.zip
+prod.png
+Сустафлекс_готовые/
+docs/screenshots-src/
+
+# build & OS junk
+*.log
+.DS_Store
+Thumbs.db
+test/**/*.out
+test/sample/**/*.out
