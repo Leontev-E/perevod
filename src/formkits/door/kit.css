@@ -1,0 +1,375 @@
+/* Door kit base styles ---------------------------------------------------- */
+.door-kit {
+    --door-width: clamp(120px, 18vw, 200px);
+    --door-height: clamp(220px, 30vw, 360px);
+    --door-shadow: 0 24px 60px rgba(17, 24, 39, 0.22);
+    --order-radius: 24px;
+    --accent: #1f75fe;
+    --accent-dark: #0b4acb;
+    --accent-light: #60a5fa;
+    --success: #22c55e;
+    --text-primary: #111827;
+    --text-secondary: #4b5563;
+    --muted: #9ca3af;
+    --order-bg: linear-gradient(140deg, #ffffff 0%, #f1f5f9 40%, #e2e8f0 100%);
+    --chip-bg: rgba(34, 197, 94, 0.12);
+    font-family: 'Montserrat', 'Open Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--text-primary);
+    background: linear-gradient(180deg, #f9fbff 0%, #eef2ff 100%);
+    padding: clamp(24px, 5vw, 48px) clamp(16px, 4vw, 40px);
+}
+
+.door-kit * {
+    box-sizing: border-box;
+}
+
+.door-kit h2,
+.door-kit h3,
+.door-kit p {
+    margin: 0;
+}
+
+.door-kit .door-section {
+    text-align: center;
+    max-width: 960px;
+    margin: 0 auto clamp(32px, 6vw, 56px);
+}
+
+.door-kit .door-heading {
+    font-size: clamp(26px, 4vw, 36px);
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: clamp(12px, 2vw, 20px);
+}
+
+.door-kit .door-subtitle {
+    font-size: clamp(16px, 2vw, 18px);
+    color: var(--text-secondary);
+    max-width: 640px;
+    margin: 0 auto clamp(24px, 5vw, 38px);
+}
+
+.door-kit .door-grid {
+    display: flex;
+    justify-content: center;
+    gap: clamp(16px, 5vw, 48px);
+    flex-wrap: wrap;
+}
+
+.door-kit .door-card {
+    position: relative;
+    width: var(--door-width);
+    height: var(--door-height);
+    perspective: 1400px;
+}
+
+.door-kit .door-card button {
+    cursor: pointer;
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+}
+
+.door-kit .door-face {
+    width: 100%;
+    height: 100%;
+    border-radius: clamp(12px, 2vw, 18px);
+    background-image: var(--door-image, linear-gradient(180deg, #1f2937, #111827));
+    background-size: cover;
+    background-position: center;
+    box-shadow: inset -2px -2px 0 1px rgba(17, 24, 39, 0.45),
+        inset 2px 2px 0 1px rgba(17, 24, 39, 0.4),
+        var(--door-shadow);
+    transform-origin: left center;
+    transform: rotateY(0deg);
+    transition: transform 0.8s cubic-bezier(0.23, 1, 0.32, 1);
+    position: relative;
+}
+
+.door-kit .door-card:not(.is-open):hover .door-face {
+    transform: rotateY(-30deg);
+}
+
+.door-kit .door-card.is-open .door-face {
+    transform: rotateY(-88deg);
+    cursor: default;
+}
+
+.door-kit .door-prize {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    padding: clamp(16px, 3vw, 22px) clamp(14px, 2.5vw, 20px);
+    background: rgba(255, 255, 255, 0.94);
+    border-radius: clamp(16px, 3vw, 24px);
+    box-shadow: 0 14px 40px rgba(15, 23, 42, 0.18);
+    font-size: clamp(24px, 5vw, 40px);
+    font-weight: 700;
+    color: #ef4444;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+}
+
+.door-kit .door-prize::after {
+    content: 'скидка';
+    display: block;
+    font-size: clamp(14px, 2.2vw, 16px);
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: clamp(6px, 1.8vw, 10px);
+}
+
+.door-kit .door-hint {
+    margin-top: clamp(24px, 4vw, 40px);
+    font-size: clamp(15px, 2vw, 16px);
+    color: var(--muted);
+    letter-spacing: 0.03em;
+}
+
+.door-kit .door-area.is-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+}
+
+.door-kit .door-area.is-hidden .door-card {
+    transition: transform 0.4s ease;
+    transform: translateY(30px);
+}
+
+.door-kit .door-order {
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--order-bg);
+    border-radius: var(--order-radius);
+    box-shadow: 0 36px 120px rgba(15, 23, 42, 0.12);
+    padding: clamp(24px, 5vw, 48px);
+}
+
+.door-kit .door-order.is-hidden {
+    display: none;
+}
+
+.door-kit .order-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: clamp(24px, 4vw, 36px);
+}
+
+.door-kit .order-badge {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(34, 197, 94, 0.06));
+    color: var(--success);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 10px 20px;
+    border-radius: 999px;
+    font-size: 13px;
+}
+
+.door-kit .order-timer {
+    font-size: 15px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.door-kit .order-timer strong {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    background: #111;
+    color: #fff;
+    padding: 8px 18px;
+    border-radius: 999px;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+
+.door-kit .order-body {
+    display: grid;
+    gap: clamp(24px, 4vw, 48px);
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    align-items: start;
+}
+
+.door-kit .order-product {
+    text-align: center;
+}
+
+.door-kit .order-product img {
+    width: clamp(180px, 40vw, 240px);
+    max-width: 100%;
+    filter: drop-shadow(0 24px 45px rgba(15, 23, 42, 0.15));
+    margin-bottom: clamp(12px, 2vw, 20px);
+}
+
+.door-kit .order-product .order-price {
+    font-size: clamp(20px, 4vw, 28px);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.door-kit .order-product .order-price s {
+    color: #ef4444;
+    font-weight: 500;
+    margin-right: 8px;
+}
+
+.door-kit .order-product .order-description {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin-top: 12px;
+    line-height: 1.6;
+}
+
+.door-kit .order-form {
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: clamp(16px, 3vw, 20px);
+    padding: clamp(20px, 4vw, 32px);
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(16px, 3vw, 20px);
+}
+
+.door-kit .order-form h3 {
+    font-size: clamp(22px, 3.6vw, 28px);
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.door-kit .order-form p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.door-kit .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.door-kit .form-field label {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.door-kit .form-field input {
+    height: 52px;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.6);
+    padding: 0 20px;
+    font-size: 16px;
+    font-family: inherit;
+    background: rgba(255, 255, 255, 0.95);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.door-kit .form-field input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(31, 117, 254, 0.18);
+    outline: none;
+}
+
+.door-kit .form-field input::placeholder {
+    color: var(--muted);
+}
+
+.door-kit .form-button {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    height: 56px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+    color: #fff;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 22px 45px rgba(31, 117, 254, 0.35);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.door-kit .form-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 28px 60px rgba(31, 117, 254, 0.4);
+}
+
+.door-kit .form-button:active {
+    transform: translateY(1px) scale(0.99);
+}
+
+.door-kit .form-note {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+}
+
+.door-kit .order-meta {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+}
+
+.door-kit .order-chip {
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--chip-bg);
+    color: var(--success);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+@media (max-width: 768px) {
+    .door-kit {
+        padding: clamp(20px, 6vw, 36px) clamp(12px, 5vw, 24px);
+    }
+
+    .door-kit .order-header {
+        justify-content: center;
+        text-align: center;
+    }
+
+    .door-kit .order-timer {
+        justify-content: center;
+    }
+
+    .door-kit .order-timer strong {
+        font-size: 18px;
+    }
+}
+
+@media (max-width: 480px) {
+    .door-kit .door-grid {
+        gap: 18px;
+    }
+
+    .door-kit .door-card {
+        width: 48vw;
+        max-width: 160px;
+        height: 260px;
+    }
+
+    .door-kit .door-prize {
+        padding: 16px 12px;
+    }
+}

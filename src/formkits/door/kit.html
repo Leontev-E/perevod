@@ -1,0 +1,88 @@
+<!--
+  Door kit — "pick a door" discount game + order form.
+  Self-contained: CSS is scoped under .door-kit, JS is an IIFE on DOMContentLoaded.
+  Asset path markers are rewritten by the injector to real URLs inside the target
+  site. Discount/prize values are data attributes the injector fills from the
+  buyer's params. Hidden tracking fields (sub1..sub5 and any extras from the
+  original form) are appended by the injector so the lead/contract is preserved.
+-->
+<div class="door-kit" data-prize-high="__DISCOUNT__" data-prize-alt="__DISCOUNT_ALT__" data-timer-seconds="600">
+    <section class="door-section door-area" data-door-area>
+        <h2 class="door-heading">Pick a door to claim your personal discount</h2>
+        <p class="door-subtitle">
+            Every visitor gets a single chance to open a gift door. Once you decide, we will reveal the remaining prizes
+            and lock the winning discount to your order.
+        </p>
+        <div class="door-grid">
+            <article class="door-card" data-door-card style="--door-image: url('__FORMKIT_ASSET__images/door.png');">
+                <div class="door-prize" aria-hidden="true" data-prize-label></div>
+                <button class="door-face" type="button" aria-label="Open the first door"></button>
+            </article>
+            <article class="door-card" data-door-card style="--door-image: url('__FORMKIT_ASSET__images/door2.png');">
+                <div class="door-prize" aria-hidden="true" data-prize-label></div>
+                <button class="door-face" type="button" aria-label="Open the second door"></button>
+            </article>
+            <article class="door-card" data-door-card style="--door-image: url('__FORMKIT_ASSET__images/door3.png');">
+                <div class="door-prize" aria-hidden="true" data-prize-label></div>
+                <button class="door-face" type="button" aria-label="Open the third door"></button>
+            </article>
+        </div>
+        <p class="door-hint">Tap any door to discover which discount belongs to you.</p>
+    </section>
+
+    <section class="door-order is-hidden" data-order-section hidden>
+        <div class="order-header">
+            <div class="order-badge">
+                Your discount <span data-prize-value>__DISCOUNT__</span>
+            </div>
+            <div class="order-timer">
+                Offer ends in:
+                <strong data-timer>10:00</strong>
+            </div>
+        </div>
+
+        <div class="order-body">
+            <aside class="order-product">
+                <img src="__FORMKIT_ASSET__images/med.png" alt="__OFFER_NAME__" loading="lazy">
+                <div class="order-price">
+                    <s>__OLD_PRICE__</s>
+                    __NEW_PRICE__
+                </div>
+                <p class="order-description">
+                    __OFFER_NAME__
+                </p>
+                <div class="order-meta">
+                    <span class="order-chip">Free delivery</span>
+                    <span class="order-chip">Pay on delivery</span>
+                </div>
+            </aside>
+
+            <form action="api.php" method="post" class="order-form" data-formkit-form>
+                <h3>Congratulations! Your discount is <span data-prize-value>__DISCOUNT__</span></h3>
+                <p>
+                    Fill in the form to secure this offer. Our consultant will call back shortly to confirm the details.
+                </p>
+
+                <div class="form-field">
+                    <label for="door-kit-name">Name</label>
+                    <input id="door-kit-name" name="name" type="text" placeholder="Enter your name">
+                </div>
+
+                <div class="form-field">
+                    <label for="door-kit-phone">Phone</label>
+                    <input id="door-kit-phone" name="phone" type="tel" placeholder="Enter your phone">
+                </div>
+
+                <button class="form-button" type="submit">Place order</button>
+
+                <p class="form-note">
+                    By submitting the form you consent to personal data processing and agree to be contacted regarding
+                    the order.
+                </p>
+
+                <!-- injected hidden tracking fields go here -->
+                __FORMKIT_HIDDEN_FIELDS__
+            </form>
+        </div>
+    </section>
+</div>

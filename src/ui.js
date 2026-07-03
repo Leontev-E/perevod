@@ -167,6 +167,18 @@ function uploadPage(opts) {
     <span class="hint">Реальные фото нового продукта — ими заменим товар на лендинге (баннеры с текстом переводим отдельно). Без них продуктовые фото останутся как есть.</span>
   </div>
   <div class="field"><label class="row" style="font-weight:600;font-size:14px;color:var(--ink)"><input type="checkbox" name="translateImages" checked style="width:auto;height:18px"> Переводить и адаптировать картинки</label></div>
+  <div class="field">
+    <label class="row" style="font-weight:600;font-size:14px;color:var(--ink)"><input type="checkbox" name="formKitToggle" id="formkit-toggle" style="width:auto;height:18px"> Заменить форму заказа на игру-воронку</label>
+    <div id="formkit-select-wrap" style="margin-top:10px;display:none;">
+      <label>Тип формы</label>
+      <select name="formKit" id="formkit-select">
+        <option value="door">Двери (Pick a door)</option>
+        <option value="wheel">Колесо фортуны (Wheel)</option>
+        <option value="medboxes">Коробки (Medboxes)</option>
+      </select>
+      <span class="hint">Сервис найдёт форму заказа на сайте и заменит её вместе с предшествующей воронкой на выбранную. Стили изолированы, скрытые поля трекинга (sub1–sub5, price, country…) сохраняются. Форма пройдёт перевод под язык и проверку вёрстки.</span>
+    </div>
+  </div>
   <button class="btn big" type="submit" id="go">Перевести лендинг →</button>
   <div class="note">Дальше всё в фоне: распакуем, переведём под ГЕО, адаптируем картинки и цены, соберём готовый ZIP. Прогресс — на следующем экране.</div>
 </form></div>
@@ -184,6 +196,8 @@ file.onchange=function(){if(file.files[0])msg.textContent='📦 '+file.files[0].
 ['dragleave','drop'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('drag');});});
 drop.addEventListener('drop',function(e){if(e.dataTransfer.files[0]){file.files=e.dataTransfer.files;file.onchange();}});
 document.getElementById('f').addEventListener('submit',function(){var g=document.getElementById('go');g.disabled=true;g.textContent='Загружаем…';});
+var fkt=document.getElementById('formkit-toggle'),fkw=document.getElementById('formkit-select-wrap');
+if(fkt)fkt.addEventListener('change',function(){fkw.style.display=fkt.checked?'block':'none';});
 </script>`);
 }
 

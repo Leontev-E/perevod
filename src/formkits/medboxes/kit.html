@@ -1,0 +1,65 @@
+<!--
+  Medboxes kit — "guess the box" discount game + order form.
+  Refactored for safe injection: CSS is scoped under .medboxes-kit (generic
+  class names like .box/.door cannot collide with the host site), JS is an IIFE.
+  The game markup is inline here (the original injected it via innerHTML); JS
+  only wires up behaviour. Markers __FORMKIT_ASSET__/__DISCOUNT__/__OFFER_NAME__
+  etc. are rewritten by the injector; __FORMKIT_HIDDEN_FIELDS__ receives the
+  original form's tracking inputs.
+-->
+<div class="medboxes-kit">
+    <div class="door__wrapper" style="max-width: 900px;margin: 0 auto;" data-medboxes-game>
+        <h2 class="door__title" data-game-title>Pick the box with the discount. Only 1 try!</h2>
+        <div class="door__container" style="flex-wrap: wrap">
+            <div class="door__content">
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+                <div class="box"><div class="hi"><p class="door__sales"></p></div><div class="door"></div></div>
+            </div>
+        </div>
+        <div class="spin-result-wrapper" data-popup-wrapper style="display:none;">
+            <div class="pop-up-window">
+                <p class="pop-up-text" data-popup-text>Congratulations! Your discount is __DISCOUNT__!</p>
+                <span class="pop-up-button" data-popup-ok>OK</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="order_block" data-order-block style="display: none;">
+        <div class="iframe" data-form-host>
+            <div class="form-font" style="line-height:1.4;text-align:center;">
+                <img src="__FORMKIT_ASSET__product.png" alt="__OFFER_NAME__" style="max-width:220px;">
+                <div class="offer-name1"><b>Get <span style="text-transform:uppercase;color:#bf2219">__OFFER_NAME__</span></b></div>
+                <div class="offer-price1">
+                    <span style="text-decoration:line-through;color:#999">__OLD_PRICE__</span>
+                    <b>__NEW_PRICE__</b>
+                </div>
+                <form class="orderForm order_form" action="api.php" method="post" autocomplete="off" data-formkit-form>
+                    <div class="block_form">
+                        <label class="block_form_label">Name:</label>
+                        <input class="form_input" placeholder="Enter your name" name="name" autocomplete="off" required>
+                    </div>
+                    <div class="block_form">
+                        <label class="block_form_label">Phone number:</label>
+                        <input type="tel" class="form_input phoneInput" placeholder="Enter your phone" name="phone" autocomplete="off" required>
+                    </div>
+                    <div style="text-align:center;">
+                        <span class="block_last" style="color: black;">Left:
+                            <span class="pac-minus lastpack" style="color:red;">67</span>
+                            units.
+                        </span>
+                    </div>
+                    <div class="clear"></div>
+                    <button class="button order-btn ifr_button" type="submit">ORDER</button>
+                    __FORMKIT_HIDDEN_FIELDS__
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

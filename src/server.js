@@ -118,7 +118,8 @@ app.post('/upload', requireAuth, uploadFields, (req, res) => {
     newPrice: (b.newPrice || '').trim(),
     oldPrice: (b.oldPrice || '').trim(),
     discount: (b.discount || '').trim(),
-    translateImages: b.translateImages != null
+    translateImages: b.translateImages != null,
+    formKit: (b.formKitToggle != null && b.formKit ? String(b.formKit).trim() : '')
   };
   const job = jobsStore.createJob(params);
   const jd = jobsStore.jobDir(job.id);

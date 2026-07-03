@@ -1,0 +1,104 @@
+<!--
+  Wheel kit — spinning wheel discount game + order form.
+  Self-contained: CSS scoped under .wheel-kit, JS is an IIFE on DOMContentLoaded.
+  Paths use __FORMKIT_ASSET__ markers (rewritten by the injector). Discount/price
+  values use __DISCOUNT__/__OLD_PRICE__/__NEW_PRICE__ markers. The injector also
+  appends the original form's hidden tracking fields at __FORMKIT_HIDDEN_FIELDS__.
+-->
+<div class="wheel-kit">
+    <section class="wheel-section" id="wheelSection">
+        <div class="wheel-container">
+            <div id="wheelRotate">
+                <div class="wheel-image" id="wheelImage"></div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(0deg) translateY(-108px);">
+                    __DISCOUNT__
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(45deg) translateY(-108px);">
+                    10%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(90deg) translateY(-108px);">
+                    50%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(135deg) translateY(-108px);">
+                    25%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(180deg) translateY(-108px);">
+                    5%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(225deg) translateY(-108px);">
+                    30%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(270deg) translateY(-108px);">
+                    15%
+                </div>
+                <div class="wheel-label" style="transform: translate(-50%, -50%) rotate(315deg) translateY(-108px);">
+                    20%
+                </div>
+            </div>
+            <button aria-label="Spin the wheel" class="spin-button" data-loading-text="Spin..." id="spinButton">
+                Spin
+            </button>
+            <div class="wheel-pointer"></div>
+        </div>
+    </section>
+
+    <div class="wheel-popup" id="wheelPopup" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="popup-content">
+            <button aria-label="Close popup" class="popup-close" id="popupClose">&times;</button>
+            <h3 class="popup-title">Congratulations! __DISCOUNT__</h3>
+            <p class="popup-text">You won a __DISCOUNT__ discount on __OFFER_NAME__!</p>
+            <button class="popup-button" id="popupOk">OK</button>
+        </div>
+    </div>
+
+    <section class="order-form" id="orderForm" aria-hidden="true">
+        <div class="timer-header">
+            <div class="discount-text">GET __DISCOUNT__ OFF</div>
+            <div class="timer-label">TIME LEFT:</div>
+            <div class="countdown-timer">
+                <div class="timer-display">
+                    <div class="timer-unit">
+                        <span class="timer-number" id="hoursDisplay">01</span>
+                        <div class="timer-label-small">HOURS</div>
+                    </div>
+                    <div class="timer-separator">:</div>
+                    <div class="timer-unit">
+                        <span class="timer-number" id="minutesDisplay">00</span>
+                        <div class="timer-label-small">MIN.</div>
+                    </div>
+                    <div class="timer-separator">:</div>
+                    <div class="timer-unit">
+                        <span class="timer-number" id="secondsDisplay">00</span>
+                        <div class="timer-label-small">SEC.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="form-content">
+            <div class="form-layout">
+                <div class="form-visual">
+                    <div class="product-showcase">
+                        <img alt="__OFFER_NAME__" class="product-image-new" loading="lazy" src="__FORMKIT_ASSET__product.png">
+                        <div class="discount-badge">
+                            <div class="discount-number">__DISCOUNT_NUM__</div>
+                            <div class="discount-percent">%</div>
+                            <div class="discount-off">OFF</div>
+                        </div>
+                    </div>
+                    <div class="price-section-new">
+                        <div class="old-price-new">__OLD_PRICE__</div>
+                        <div class="new-price-new">__NEW_PRICE__</div>
+                    </div>
+                </div>
+                <div class="form-card">
+                    <form action="api.php" class="form-fields-new" id="orderFormElement" method="post" data-formkit-form>
+                        <input class="form-input-new" name="name" placeholder="Your name" required type="text">
+                        <input class="form-input-new" name="phone" placeholder="Phone number" required type="tel">
+                        <button class="submit-button-new" type="submit">ORDER</button>
+                        __FORMKIT_HIDDEN_FIELDS__
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>

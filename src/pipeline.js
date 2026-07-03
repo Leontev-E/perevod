@@ -17,6 +17,7 @@ const textAgent = require('./agents/textAgent');
 const controller = require('./agents/controller');
 const imageAgent = require('./agents/imageAgent');
 const lessons = require('./lessons');
+const { injectFormKit } = require('./formkits/inject');
 
 function log(id, type, msg, extra) { jobsStore.emit(id, Object.assign({ type, msg }, extra)); }
 
@@ -36,6 +37,20 @@ async function runJob(job) {
     log(id, 'step', 'Распаковка архива…');
     const siteRoot = extractZip(path.join(dir, 'upload.zip'), outDir);
     job.siteRoot = siteRoot;
+
+    // ---- 0.5 form-kit replacement (optional) ----
+    // If the buyer asked to swap the lead form for a kit (door/wheel/medboxes),
+    // do it BEFORE the scan so the kit markup is translated + gated + rendered
+    // like any other part of the site. Graceful: a miss/throw never aborts the job.
+    if (job.params.formKit) {
+      try {
+        const fk = injectFormKit(siteRoot, job.params);
+        if (fk.ok) log(id, 'progress', `Замена формы: kit «${fk.kit}» вставлен в ${fk.file} (перенесено ${fk.hiddenFieldsCarried} скрытых полей, ${fk.extrasAdded} доп.). Стили/JS изолированы, форма пройдёт через перевод и проверку.`);
+        else log(id, 'warn', `Замена формы пропущена: ${fk.reason}. Сайт переводится как есть.`);
+      } catch (e) {
+        log(id, 'warn', `Замена формы: ${e.message}. Сайт переводится как есть.`);
+      }
+    }
 
     // ---- 1. scan ----
     log(id, 'step', 'Сканирование файлов…');
