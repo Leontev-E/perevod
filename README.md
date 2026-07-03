@@ -1,9 +1,9 @@
 <div align="center">
 
-# 🌍 Perevod — AI Landing-Page Localizer
+# 🌍 Perevod - AI Landing-Page Localizer
 
 **Drop in a landing-page ZIP → get it back fully localized for another GEO & offer.**
-Text, prices, forms and images are adapted — the layout stays intact.
+Text, prices, forms and images are adapted - the layout stays intact.
 
 [![Docker](https://img.shields.io/badge/deploy-Docker-2496ED?logo=docker&logoColor=white)](#-quick-start)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=nodedotjs&logoColor=white)](package.json)
@@ -22,14 +22,14 @@ Text, prices, forms and images are adapted — the layout stays intact.
 
 You upload a ZIP of a landing page and a few parameters (country, language, currency, offer name, prices, discount). Perevod returns a ready-to-launch ZIP **and** a live preview:
 
-- **Human translation & localization** — not word-for-word: cities, reviewer names, phone codes and the whole tone are adapted to the target GEO.
-- **Offer swap** — the old product/brand is replaced by your offer name everywhere: body text, form fields, `<meta>` and even on images.
-- **Prices & discounts** — updated in text, in forms and inside JS promo logic (spinners, "pick a door", timers). Free-mode (0 / 100 %) is handled without "free + discount" contradictions.
-- **Images** — text banners are re-drawn in the target language; product shots can be replaced with your own offer photos; real review/lifestyle photos are edited (the new package composited in) so the page stays alive.
-- **Never breaks the layout** — the DOM skeleton is diffed before/after; any edit that would change the structure is rolled back automatically.
-- **Writing systems** — pick Cyrillic / Latin / Arabic for languages that use several (Uzbek, Kazakh, Serbian…).
-- **Self-improving** — the orchestrator keeps a growing list of "house rules" learned from past jobs.
-- **Real-browser check** — the result is rendered in a headless browser and compared to the original (funnel depth, forms, new JS errors).
+- **Human translation & localization** - not word-for-word: cities, reviewer names, phone codes and the whole tone are adapted to the target GEO.
+- **Offer swap** - the old product/brand is replaced by your offer name everywhere: body text, form fields, `<meta>` and even on images.
+- **Prices & discounts** - updated in text, in forms and inside JS promo logic (spinners, "pick a door", timers). Free-mode (0 / 100 %) is handled without "free + discount" contradictions.
+- **Images** - text banners are re-drawn in the target language; product shots can be replaced with your own offer photos; real review/lifestyle photos are edited (the new package composited in) so the page stays alive.
+- **Never breaks the layout** - the DOM skeleton is diffed before/after; any edit that would change the structure is rolled back automatically.
+- **Writing systems** - pick Cyrillic / Latin / Arabic for languages that use several (Uzbek, Kazakh, Serbian…).
+- **Self-improving** - the orchestrator keeps a growing list of "house rules" learned from past jobs.
+- **Real-browser check** - the result is rendered in a headless browser and compared to the original (funnel depth, forms, new JS errors).
 
 > It never touches your backend: `api.php`, `error.php`, `success.php` and the `success/` `error/` dictionary folders are left exactly as they are.
 
@@ -48,7 +48,7 @@ flowchart LR
   I --> J["ZIP + live preview"]
 ```
 
-Text is never handed to a model as "rewrite this file". A safe extractor pulls out **only** human-readable strings — `parse5` for HTML, PHP's own tokenizer (`token_get_all`) to separate inline-HTML from PHP code, `acorn` for JS string literals, JSON string values — translates those, and stitches them back byte-for-byte. That is why the markup, styles and scripts survive.
+Text is never handed to a model as "rewrite this file". A safe extractor pulls out **only** human-readable strings - `parse5` for HTML, PHP's own tokenizer (`token_get_all`) to separate inline-HTML from PHP code, `acorn` for JS string literals, JSON string values - translates those, and stitches them back byte-for-byte. That is why the markup, styles and scripts survive.
 
 ```mermaid
 flowchart TB
@@ -102,12 +102,12 @@ Everything lives in `.env` (created from [`.env.example`](.env.example)). No sec
 |---|---|---|
 | `APP_PASSWORD` | *(random)* | Password for the web UI |
 | `SESSION_SECRET` | *(random)* | Signs the session cookie |
-| `WEB_PORT` | `8070` | Host port — `http://SERVER_IP:8070` |
+| `WEB_PORT` | `8070` | Host port - `http://SERVER_IP:8070` |
 | `PUBLIC_BASE_URL` | `http://localhost:8070` | Public URL for download/preview links |
 | `MAX_IMAGES` | `60` | Max image edits per job |
 | `MAX_UPLOAD_MB` | `80` | Max upload size |
 
-The **kie.ai key is set in the UI**, not here — it is saved to `/data/settings.json` on the Docker volume.
+The **kie.ai key is set in the UI**, not here - it is saved to `/data/settings.json` on the Docker volume.
 
 > 🔒 **Production tip:** the app has a password gate but ships over plain HTTP on `WEB_PORT`. Put it behind a reverse proxy (Nginx / Caddy / Apache) with HTTPS and point `PUBLIC_BASE_URL` at your domain.
 
@@ -123,10 +123,10 @@ Node.js 20 · Express · Docker · headless Chromium (`puppeteer-core`) · `pars
 
 ## 📇 Contacts
 
-- 📣 **Developer channel — BoostClicks (Евгений Леонтьев):** https://t.me/boostclicks
-- 🛡 **Google cloaker — BoostRouter:** https://klo-boostclicks.online
+- 📣 **Developer channel - BoostClicks (Евгений Леонтьев):** https://t.me/boostclicks
+- 🛡 **Google cloaker - BoostRouter:** https://klo-boostclicks.online
 - 🌐 **Traffic arbitrage:** https://boostclicks.ru
 
 ## 📄 License
 
-[MIT](LICENSE) © BoostClicks — Евгений Леонтьев
+[MIT](LICENSE) © BoostClicks - Евгений Леонтьев
