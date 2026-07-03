@@ -130,9 +130,17 @@ async function buildBrief(params, sampleTexts, imageNames) {
 // appears in different inflected/partial forms (Polish "Jan Kowalski" vs
 // instrumental "Frankiem Lindnerem"; "Dr. Komil" vs just "Komil" in dialogue).
 // The grouping into persons is done by the LLM below; here we only seed it.
+// Stop-lists cut junk the regex would otherwise pick up as a "name":
+//  - single-letter "names" (L. Calle from "Ruscrea, S.L. Calle." in an address)
+//  - company/legal forms (S.L., Ltd, LLC, GmbH, OOO, S.A., Inc, Bio Fresh ltd)
+//  - global famous people who appear as quotes/mentions, never as the lead
+const NAME_STOP_SECOND = /^(SL|S\.L|Ltd|LLC|GmbH|OOO|ОАО|ЗАО|ИП|S\.A|Inc|Corp|ltd|Co)$/;
+const NAME_FAMOUS = new Set(['nelson mandela', 'barack obama', 'albert einstein', 'winston churchill', 'mahatma gandhi', 'mother teresa', 'martin luther', 'leonardo da', 'steve jobs', 'bill gates', 'arnold schwarzenegger']);
 function candidatePersonNames(texts) {
   const freq = new Map();
-  const re = /\b(\p{Lu}[\p{Ll}'’.\u0300-\u036f-]+)\s+(\p{Lu}[\p{Ll}'’.\u0300-\u036f-]+)\b/gu;
+  // Require the FIRST token to be a real name word (>=2 letters), not a single
+  // initial like "L." which is almost always part of a company/address.
+  const re = /\b(\p{Lu}[\p{Ll}'’\u0300-\u036f]{2,})\s+(\p{Lu}[\p{Ll}'’.\u0300-\u036f-]+)\b/gu;
   for (const t of texts || []) {
     const s = String(t);
     let m;
@@ -140,6 +148,8 @@ function candidatePersonNames(texts) {
       const name = (m[1] + ' ' + m[2]);
       if (name.length < 5 || name.length > 40) continue;
       if (PRODUCT_MARKER.test(name) || isGlobalBrand(name) || GREETING_RE.test(name)) continue;
+      if (NAME_STOP_SECOND.test(m[2])) continue;             // "Foo Ltd" / "X S.L."
+      if (NAME_FAMOUS.has(name.toLowerCase())) continue;     // famous quote mentions
       freq.set(name, (freq.get(name) || 0) + 1);
     }
   }
@@ -158,7 +168,7 @@ async function buildNameGlossary(sampleTexts, localeRules, params) {
   // localized name. This defeats the "same doctor, two names" inconsistency.
   const input =
 `These are personal-name mentions scraped from a website (a landing page). Several may refer to the SAME person in different forms/inflections (e.g. "Jan Kowalski", "J. Kowalski", "Kowalski", "panem Janem Kowalskim"; "Dr. Ahmed", "Ahmed"). Group mentions that are the same person, and assign each PERSON exactly ONE localized name as used by real people in ${params.country}.
-Use names typical of ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''} — keep the person's role/sense, you may adapt to local naming customs. Skip mentions that are clearly not a person (companies, place names, greetings, product words).
+Use names typical of ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''} — keep the person's role/sense, you may adapt to local naming customs. Skip mentions that are clearly not a person (companies, legal forms like S.L./Ltd/GmbH, addresses/place names, greetings, product words, and famous historical/public figures that appear only as a quote or reference).
 Mentions: ${JSON.stringify(mentions)}
 Return strict JSON: {"persons":[{"mentions":["<original mention(s)>"],"target":"<ONE localized ${langDirective(params)} name>"}]}`;
   const { obj } = await kie.orchestrateJson({ instructions: 'You assign localized personal names and output JSON only. Never refuse.', input, effort: 'low' });

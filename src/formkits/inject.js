@@ -132,7 +132,10 @@ function copyAssets(id, siteRoot) {
 
 // ---- main entry: inject a kit into a site, return a report ----
 // params: { formKit, discount, newPrice, oldPrice, currency, offerName, ... }
-function injectFormKit(siteRoot, params) {
+// offerPhotos: optional array of Buffers (buyer-uploaded product photos). The
+// first one is written as product.png into the kit asset dir so the kit's
+// <img src="__FORMKIT_ASSET__product.png"> resolves to the real new product.
+function injectFormKit(siteRoot, params, offerPhotos) {
   const id = String(params.formKit || '').trim();
   const kit = kits.get(id);
   if (!kit) return { ok: false, reason: 'unknown kit' };
@@ -147,6 +150,28 @@ function injectFormKit(siteRoot, params) {
   // Copy kit assets into the site.
   const assetInfo = copyAssets(id, siteRoot);
 
+  // If the buyer uploaded offer photos, write the first one as product.png in
+  // the kit asset dir. Wheel/medboxes kits show this image in the order form;
+  // without it the <img> would 404 (the "broken offer photo" bug).
+  let hasProductImage = false;
+  if (Array.isArray(offerPhotos) && offerPhotos.length) {
+    try {
+      fs.writeFileSync(path.join(assetInfo.dir, 'product.png'), offerPhotos[0]);
+      hasProductImage = true;
+    } catch { /* ignore — kit will hide the image below */ }
+  } else {
+    // No buyer photo: fall back to the kit's own shipped product image if it
+    // has one (door ships images/med.png). Copy it as product.png so the kit
+    // <img src=...product.png> still resolves.
+    const k = kits.get(id);
+    const fallbacks = { door: 'images/med.png' };
+    const fb = fallbacks[id];
+    if (fb) {
+      const fbPath = path.join(k.dir, fb.split('/').join(path.sep));
+      try { if (fs.existsSync(fbPath)) { fs.copyFileSync(fbPath, path.join(assetInfo.dir, 'product.png')); hasProductImage = true; } } catch { /* noop */ }
+    }
+  }
+
   // Render the kit markup.
   const kitHtml = kits.readHtml(id);
   const action = {
@@ -154,7 +179,14 @@ function injectFormKit(siteRoot, params) {
     offerName: params.offerName || '',
     actionFromOriginal: contract.action
   };
-  const rendered = renderKit(id, kitHtml, assetInfo.urlBase, action, contract.hidden);
+  let rendered = renderKit(id, kitHtml, assetInfo.urlBase, action, contract.hidden);
+
+  // If there is no product image for this kit, drop the product <img> entirely
+  // (a broken img icon is worse than no image). We target the kit's product img
+  // by the __FORMKIT_ASSET__product.png src that the kits declare.
+  if (!hasProductImage) {
+    rendered = rendered.replace(/<img[^>]*src="(?:[^"]*\/)?_formkit-[^"]*\/product\.png"[^>]*>/gi, '');
+  }
 
   // Splice the rendered kit into the masked HTML, then restore PHP into the
   // full source string, and write it back.

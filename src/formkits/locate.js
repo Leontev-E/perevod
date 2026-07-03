@@ -154,16 +154,54 @@ function locateInSource(source) {
   };
 }
 
-// Convenience: locate inside an index file on disk (index.php preferred).
+// Locate the lead form on disk. We check the index files first (the common
+// case), then fall back to scanning every other PHP/HTML page — some landings
+// put the order form on a separate page (result.php, order.php, ...) rather
+// than the landing index. Backend endpoints (api.php/error.php/success.php)
+// and excluded dirs (success/error) are never scanned.
+const cfg = require('../config');
+const TEXT_EXTS = new Set(['.php', '.phtml', '.html', '.htm']);
+
 function locateInSite(siteRoot) {
-  const cands = ['index.php', 'index.html', 'index.htm', 'index.phtml'];
-  for (const rel of cands) {
+  const indexCands = ['index.php', 'index.html', 'index.htm', 'index.phtml'];
+  // 1) index files first
+  for (const rel of indexCands) {
     const fp = path.join(siteRoot, rel);
     if (!fs.existsSync(fp)) continue;
     let source;
     try { source = fs.readFileSync(fp, 'utf8'); } catch { continue; }
     const loc = locateInSource(source);
     if (loc.found) return Object.assign({ filePath: fp, relpath: rel, source }, loc);
+  }
+  // 2) walk every other text page, skipping excluded basenames/dirs
+  const excludedBase = new Set((cfg.excludedBasenames || []).map(s => s.toLowerCase()));
+  const excludedDir = new Set((cfg.excludedDirs || []).map(s => s.toLowerCase()));
+  const queue = [['', siteRoot]];
+  const seen = new Set();
+  while (queue.length) {
+    const [relDir, absDir] = queue.shift();
+    let ents;
+    try { ents = fs.readdirSync(absDir, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const childAbs = path.join(absDir, e.name);
+      const childRel = relDir ? relDir + '/' + e.name : e.name;
+      if (e.isDirectory()) {
+        if (excludedDir.has(e.name.toLowerCase())) continue;
+        queue.push([childRel, childAbs]);
+        continue;
+      }
+      const ext = path.extname(e.name).toLowerCase();
+      if (!TEXT_EXTS.has(ext)) continue;
+      if (excludedBase.has(e.name.toLowerCase())) continue;
+      if (indexCands.includes(e.name.toLowerCase())) continue; // already tried
+      if (seen.has(childAbs)) continue;
+      seen.add(childAbs);
+      let source;
+      try { source = fs.readFileSync(childAbs, 'utf8'); } catch { continue; }
+      const loc = locateInSource(source);
+      if (loc.found) return Object.assign({ filePath: childAbs, relpath: childRel, source }, loc);
+    }
   }
   return { found: false };
 }

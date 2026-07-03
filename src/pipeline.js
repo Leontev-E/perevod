@@ -44,7 +44,7 @@ async function runJob(job) {
     // like any other part of the site. Graceful: a miss/throw never aborts the job.
     if (job.params.formKit) {
       try {
-        const fk = injectFormKit(siteRoot, job.params);
+        const fk = injectFormKit(siteRoot, job.params, offerPhotos);
         if (fk.ok) log(id, 'progress', `Замена формы: kit «${fk.kit}» вставлен в ${fk.file} (перенесено ${fk.hiddenFieldsCarried} скрытых полей, ${fk.extrasAdded} доп.). Стили/JS изолированы, форма пройдёт через перевод и проверку.`);
         else log(id, 'warn', `Замена формы пропущена: ${fk.reason}. Сайт переводится как есть.`);
       } catch (e) {
