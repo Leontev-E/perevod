@@ -16,6 +16,7 @@ const { adaptJsPromo } = require('./agents/jsPromo');
 const textAgent = require('./agents/textAgent');
 const controller = require('./agents/controller');
 const imageAgent = require('./agents/imageAgent');
+const lessons = require('./lessons');
 
 function log(id, type, msg, extra) { jobsStore.emit(id, Object.assign({ type, msg }, extra)); }
 
@@ -171,7 +172,18 @@ async function runJob(job) {
       const rt = await renderCheck(siteRoot, path.join(dir, 'render_out.png'));
       renderVerdict = compareRenders(ro, rt);
       try { fs.rmSync(origTmp, { recursive: true, force: true }); } catch { /* noop */ }
-      if (renderVerdict.verdict === 'regression') log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify({ newErrors: renderVerdict.newErrors, funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles, formLost: renderVerdict.formLost }).slice(0, 220)}`);
+      if (renderVerdict.verdict === 'regression') {
+        log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify({ newErrors: renderVerdict.newErrors, funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles, formLost: renderVerdict.formLost }).slice(0, 220)}`);
+        // Self-improving memory: a concrete regression becomes a house rule the
+        // agents read on future jobs. Keep the rule generic + actionable.
+        try {
+          const bits = [];
+          if (renderVerdict.newErrors && renderVerdict.newErrors.length) bits.push(`introduced new JS errors: ${renderVerdict.newErrors.slice(0, 3).join('; ')}`);
+          if (renderVerdict.funnelRegressed) bits.push(`funnel depth dropped (${renderVerdict.origBubbles}→${renderVerdict.outBubbles})`);
+          if (renderVerdict.formLost) bits.push('order form became unreachable');
+          if (bits.length) lessons.add('structure', `A past localized landing showed a browser regression: ${bits.join('; ')}. When editing similar files, double-check the affected selectors/JS still fire and the form stays reachable.`);
+        } catch { /* never let a lesson write break the job */ }
+      }
       else if (renderVerdict.verdict === 'ok') log(id, 'progress', `Проверка в браузере: всё на месте (шаги ${renderVerdict.origBubbles}→${renderVerdict.outBubbles}, форма ${renderVerdict.outForm ? 'видна' : 'нет'}, новых ошибок 0)`);
       else log(id, 'progress', `Проверка в браузере пропущена (${renderVerdict.note || 'нет браузера'})`);
     } catch (e) { log(id, 'warn', `Проверка в браузере: ${e.message}`); }
@@ -239,6 +251,11 @@ async function applyAndVerifyFile(id, pf, translations, params, brief, backupDir
       if (!cmp.ok) {
         rec.rolledBack = true;
         log(id, 'warn', `Структура ${pf.relpath} изменилась — файл ОТКАЧЕН к оригиналу (${JSON.stringify(cmp.tagDiffs).slice(0, 120)})`);
+        // Record the structural drift so future runs learn what to avoid.
+        try {
+          const d = cmp.tagDiffs && cmp.tagDiffs[0];
+          if (d) lessons.add('structure', `A translated ${pf.type} file changed its DOM skeleton (${d.tag}: ${d.before}→${d.after}) and had to be rolled back. Prefer translations that keep the same tag/attribute structure; if a fragment would change markup, leave it untouched.`);
+        } catch { /* noop */ }
         report.files.push(rec);
         return; // leave the original file on disk untouched
       }
@@ -363,7 +380,10 @@ async function processImages(id, imageFiles, siteRoot, backupDir, params, brief,
   }
 
   await Promise.all(groupList.map((grp) => limit(async () => {
-    if (edited >= cfg.maxImages) { skipped++; return; }
+    // The hard cap covers BOTH edited and replaced images, so an offer with many
+    // product_hero slots can't burn unlimited credits. analyzed/left/skipped are
+    // not billed AI edits, so they don't count toward the cap.
+    if ((edited + replaced) >= cfg.maxImages) { skipped++; return; }
     // pick primary raster to analyze/edit
     const order = { '.png': 0, '.jpg': 1, '.jpeg': 1, '.webp': 2 };
     grp.sort((a, b) => (order[a.ext] ?? 9) - (order[b.ext] ?? 9));
@@ -407,7 +427,7 @@ async function processImages(id, imageFiles, siteRoot, backupDir, params, brief,
     // the real photo stays alive — never flat-replace. Badges/decor/logos/person-
     // only (no words, no brand) are left untouched.
     if (!(hasWords || analysis.brandOnImage)) { left++; rec.kind = 'left'; report.images.push(rec); return; }
-    if (edited >= cfg.maxImages) { skipped++; report.images.push(rec); return; }
+    if ((edited + replaced) >= cfg.maxImages) { skipped++; report.images.push(rec); return; }
 
     try {
       const what = analysis.category === 'lifestyle' ? 'живое фото: смена бренда' : (analysis.brandOnImage ? 'текст+бренд' : 'перевод текста');

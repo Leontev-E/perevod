@@ -56,17 +56,34 @@ function authHeaders(extra = {}) {
 
 // ---- Claude Sonnet 5 (text + optional images) ---------------------------------
 // messages: [{role:'user'|'assistant', content: string | [blocks]}]
+// Circuit breaker mirrors gptBreaker: if Claude Sonnet 5 is failing repeatedly
+// (kie outage / moderation storm on a nutra landing), stop hammering it for a
+// cooldown so translation batches fall through to the chat/GPT fallbacks fast
+// instead of each one burning 4 retries × 180s timeouts.
+const claudeBreaker = { fails: 0, until: 0 };
+function claudeOpen() { return Date.now() < claudeBreaker.until; }
+function claudeNoteFail() { if (++claudeBreaker.fails >= 4) claudeBreaker.until = Date.now() + 90000; }
+function claudeNoteOk() { claudeBreaker.fails = 0; claudeBreaker.until = 0; }
+
 async function claude({ system, messages, maxTokens = 8000, temperature, model }) {
+  // When the breaker is open, fail fast — callers already have a multi-tier
+  // fallback (chat models / GPT 5.5). Throwing here short-circuits cleanly.
+  if (claudeOpen()) {
+    const e = new Error('claude circuit open'); e.breaker = true; throw e;
+  }
   const body = { model: model || cfg.kie.claudeModel, max_tokens: maxTokens, messages };
   if (system) body.system = system;
   if (typeof temperature === 'number') body.temperature = temperature;
-  const json = await fetchJson(cfg.kie.claudeUrl, {
-    method: 'POST', headers: authHeaders(), body: JSON.stringify(body)
-  }, { retries: 4, timeoutMs: 180000 });
-  const parts = Array.isArray(json.content) ? json.content : [];
-  const txt = parts.filter(p => p && (p.type === 'text' || typeof p.text === 'string'))
-                   .map(p => p.text || '').join('');
-  return { text: txt, raw: json, credits: json.credits_consumed };
+  try {
+    const json = await fetchJson(cfg.kie.claudeUrl, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify(body)
+    }, { retries: 4, timeoutMs: 180000 });
+    const parts = Array.isArray(json.content) ? json.content : [];
+    const txt = parts.filter(p => p && (p.type === 'text' || typeof p.text === 'string'))
+                     .map(p => p.text || '').join('');
+    claudeNoteOk();
+    return { text: txt, raw: json, credits: json.credits_consumed };
+  } catch (e) { claudeNoteFail(); throw e; }
 }
 
 // A Claude helper that expects and repairs strict JSON output.

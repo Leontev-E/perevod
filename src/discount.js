@@ -13,7 +13,8 @@ function pct(discountRaw) {
   const m = s.match(/-?\d+(?:[.,]\d+)?/);
   if (!m) return null;
   const num = m[0];
-  const hasPct = /%/.test(s) || true; // discounts are shown as N%
+  // Discounts are always rendered as "N%" in the UI, regardless of whether
+  // the buyer typed the percent sign.
   return { num, pctStr: num + '%' };
 }
 

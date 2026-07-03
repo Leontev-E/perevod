@@ -9,6 +9,7 @@ const ui = require('./ui');
 const jobsStore = require('./jobs');
 const pipeline = require('./pipeline');
 const settings = require('./settings');
+const { stripPhpSafe } = require('./extract/mask');
 const { defaultsFor } = require('./util/lang');
 
 const app = express();
@@ -27,13 +28,63 @@ function requireAuth(req, res, next) {
 
 app.get('/health', (req, res) => res.type('text').send('ok'));
 
-app.get('/login', (req, res) => res.send(ui.loginPage(req.query.e)));
+// ---- brute-force throttle on /login ----
+// No external dep: a small in-memory per-IP failure tracker. After MAX_FAILS
+// within the window, the IP is locked out for a cooldown that grows with
+// repeated lockouts. Sufficient for a single-tenant gate on a public domain.
+const LOGIN_MAX_FAILS = parseInt(process.env.LOGIN_MAX_FAILS || '5', 10);
+const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_WINDOW_MS || String(10 * 60 * 1000), 10); // 10 min
+const LOGIN_BASE_LOCK_MS = parseInt(process.env.LOGIN_BASE_LOCK_MS || String(60 * 1000), 10); // 1 min
+const loginFails = new Map(); // ip -> { count: n, first: ts, lockedUntil: ts, locks: n }
+function clientIp(req) {
+  // Behind Apache reverse-proxy; trust X-Forwarded-For leftmost when present.
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+function loginLockState(ip, now) {
+  const r = loginFails.get(ip);
+  if (!r) return { locked: false };
+  if (r.lockedUntil && r.lockedUntil > now) return { locked: true, retryAfterMs: r.lockedUntil - now };
+  return { locked: false };
+}
+function noteLoginFail(ip, now) {
+  let r = loginFails.get(ip);
+  if (!r || (r.first && now - r.first > LOGIN_WINDOW_MS)) r = { count: 0, first: now, locks: 0 };
+  r.count++;
+  if (r.count >= LOGIN_MAX_FAILS) {
+    // Exponential-ish backoff: 1m, 2m, 4m ... capped at 15m.
+    r.locks = (r.locks || 0) + 1;
+    const lockMs = Math.min(LOGIN_BASE_LOCK_MS * Math.pow(2, r.locks - 1), 15 * 60 * 1000);
+    r.lockedUntil = now + lockMs;
+    r.count = 0; // window resets after a lock so a legit user isn't punished forever
+  }
+  loginFails.set(ip, r);
+}
+function clearLoginFails(ip) { loginFails.delete(ip); }
+
+app.get('/login', (req, res) => {
+  const st = loginLockState(clientIp(req), Date.now());
+  if (st.locked) {
+    res.setHeader('Retry-After', Math.ceil(st.retryAfterMs / 1000));
+    return res.status(429).type('text').send('Слишком много попыток. Попробуйте позже.');
+  }
+  res.send(ui.loginPage(req.query.e));
+});
 app.post('/login', (req, res) => {
+  const ip = clientIp(req);
+  const st = loginLockState(ip, Date.now());
+  if (st.locked) {
+    res.setHeader('Retry-After', Math.ceil(st.retryAfterMs / 1000));
+    return res.status(429).type('text').send('Слишком много попыток. Попробуйте позже.');
+  }
   // trim() so a stray space/newline from copy-paste never blocks a correct password
   if ((req.body.password || '').trim() === (cfg.password || '').trim()) {
+    clearLoginFails(ip);
     res.cookie('auth', '1', { signed: true, httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 3600 * 1000 });
     return res.redirect('/');
   }
+  noteLoginFail(ip, Date.now());
   return res.redirect('/login?e=1');
 });
 app.post('/logout', (req, res) => { res.clearCookie('auth'); res.redirect('/login'); });
@@ -137,7 +188,7 @@ app.get('/preview/:id/*', requireAuth, (req, res) => {
   if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) return res.status(404).send('не найдено');
   const ext = path.extname(target).toLowerCase();
   if (ext === '.php' || ext === '.phtml') {
-    let html = fs.readFileSync(target, 'utf8').replace(/<\?[\s\S]*?\?>/g, '');
+    const html = stripPhpSafe(fs.readFileSync(target, 'utf8'));
     return res.type('html').send(html);
   }
   return res.sendFile(target);
@@ -162,4 +213,5 @@ app.get('/original/:id/*', requireAuth, (req, res) => {
 app.listen(cfg.port, () => {
   console.log(`[perevod] listening on :${cfg.port}  data=${cfg.dataDir}  model(text)=${cfg.kie.claudeModel} model(orch)=${cfg.kie.gptModel} model(img)=${cfg.kie.imageModel}`);
   if (!cfg.kie.key) console.warn('[perevod] WARNING: KIE_API_KEY is empty');
+  jobsStore.startGc();
 });

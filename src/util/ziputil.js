@@ -8,13 +8,23 @@ const path = require('path');
 function extractZip(zipPath, destDir) {
   const zip = new AdmZip(zipPath);
   const entries = zip.getEntries();
+  const base = path.resolve(destDir);
+  const prefix = base + path.sep;
   fs.mkdirSync(destDir, { recursive: true });
   for (const e of entries) {
-    const target = path.resolve(destDir, e.entryName);
-    if (!target.startsWith(path.resolve(destDir) + path.sep) && target !== path.resolve(destDir)) {
+    // Normalise entry separators (zip entries always use '/'); a backslash in
+    // a name is a legit file character on Windows but path.resolve treats it
+    // as a separator, which is exactly what a zip-slip attack exploits.
+    const safeName = e.entryName.replace(/\\/g, '/');
+    const target = path.resolve(base, safeName);
+    // Hard zip-slip guard: resolved target must be base itself or under it.
+    if (target !== base && !target.startsWith(prefix)) {
       throw new Error('zip-slip blocked: ' + e.entryName);
     }
-    if (e.isDirectory) { fs.mkdirSync(target, { recursive: true }); continue; }
+    // isDirectory is a METHOD on AdmZip entries (a plain property lookup is
+    // always truthy on the function object). Call it to detect dir entries.
+    const isDir = typeof e.isDirectory === 'function' ? e.isDirectory() : e.isDirectory;
+    if (isDir) { fs.mkdirSync(target, { recursive: true }); continue; }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, e.getData());
   }

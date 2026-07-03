@@ -116,7 +116,57 @@ async function buildBrief(params, sampleTexts, imageNames) {
     getLocaleRules(params).catch(() => ({})),
     getSourceOfferNames(sampleTexts).catch(() => [])
   ]);
-  return { localeRules, sourceOfferNames, sourceLanguageGuess: '', glossary: {}, notes: '' };
+  // Build a name glossary for recurring personal names. Without it, the same
+  // person (e.g. a doctor named in the header AND the dialogue) can get two
+  // different localized names (Komil in the header, Sardor in the body) because
+  // each fragment is translated in isolation. Pinning source->target up front
+  // makes every occurrence consistent. Returns {} on any failure (safe default).
+  const glossary = await buildNameGlossary(sampleTexts || [], localeRules, params).catch(() => ({}));
+  return { localeRules, sourceOfferNames, sourceLanguageGuess: '', glossary, notes: '' };
+}
+
+// Find recurring personal names in the source and assign each ONE consistent
+// localized name for the target GEO, so the same doctor/testimonial author is
+// rendered identically everywhere. Returns { "Source Name": "Localized Name" }.
+function candidatePersonNames(texts) {
+  const freq = new Map();
+  // Two Title-case words (first + last), Latin or Cyrillic, allowing diacritics,
+  // apostrophes and hyphens. Same shape we use in looksLikePersonName above.
+  const re = /\b(\p{Lu}[\p{Ll}'’.-]+)\s+(\p{Lu}[\p{Ll}'’.-]+)\b/gu;
+  for (const t of texts || []) {
+    const s = String(t);
+    let m;
+    while ((m = re.exec(s))) {
+      const name = (m[1] + ' ' + m[2]);
+      if (name.length < 5 || name.length > 40) continue;
+      if (PRODUCT_MARKER.test(name) || isGlobalBrand(name) || GREETING_RE.test(name)) continue;
+      freq.set(name, (freq.get(name) || 0) + 1);
+    }
+  }
+  // Only names that RECUR (>=2) are worth pinning — a one-off name has nothing
+  // to be inconsistent with, and the model already localizes it per-fragment.
+  return [...freq.entries()].filter(([, v]) => v >= 2)
+    .sort((a, b) => b[1] - a[1]).slice(0, 12).map(([n]) => n);
+}
+
+async function buildNameGlossary(sampleTexts, localeRules, params) {
+  const names = candidatePersonNames(sampleTexts);
+  if (!names.length) return {};
+  const examples = (localeRules && localeRules.nameExamples) || [];
+  const input =
+`These are recurring personal names found on a website. Give each ONE consistent localized name as used by real people in ${params.country}.
+Use names typical of ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''} — keep the person's role/sense, you may adapt the name to local naming customs. Output strictly the localized full name, nothing else per item.
+Return strict JSON: {"names":[{"source":"<original name>","target":"<localized ${langDirective(params)} name>"}]}
+Names: ${JSON.stringify(names)}`;
+  const { obj } = await kie.orchestrateJson({ instructions: 'You assign localized personal names and output JSON only. Never refuse.', input, effort: 'low' });
+  const list = (obj && Array.isArray(obj.names)) ? obj.names : [];
+  const out = {};
+  for (const item of list) {
+    const src = item && typeof item.source === 'string' ? item.source.trim() : '';
+    const tgt = item && typeof item.target === 'string' ? item.target.trim() : '';
+    if (src && tgt && !REFUSAL_RE.test(tgt)) out[src] = tgt;
+  }
+  return out;
 }
 
 // Benign proofreading pass over already-translated fragments. It ONLY fixes
@@ -157,9 +207,33 @@ Return strict JSON: {"improved":{"<id>":"<corrected text>"}}. If all are fine, r
 }
 
 async function finalSignoff(summary) {
+  // Build a COMPACT summary so the verdict is based on the whole job, not a
+  // truncated slice. We never send every per-fragment detail (would overflow the
+  // model context and the old slice(0,4000) silently dropped later files).
+  // Instead: aggregate counts + only the files worth a human's attention
+  // (rolled back / QA-flagged / changed images) — capped, not truncated mid-object.
+  const files = Array.isArray(summary.files) ? summary.files : [];
+  const images = Array.isArray(summary.images) ? summary.images : [];
+  const interesting = files
+    .filter(f => f.rolledBack || (f.verdict && !/^ok|n\/a|polished\s*\d+$/i.test(f.verdict)))
+    .slice(0, 40)
+    .map(f => ({ f: f.f, rolledBack: !!f.rolledBack, verdict: f.verdict }));
+  const changedImages = images.filter(i => i.changed).slice(0, 40).map(i => i.f);
+  const compact = {
+    totals: {
+      textFiles: files.length,
+      changedFiles: files.filter(f => f.changed).length,
+      rolledBackFiles: files.filter(f => f.rolledBack).length,
+      missingFragments: summary.missing || 0,
+      imagesChanged: images.filter(i => i.changed).length,
+      imagesTotal: images.length
+    },
+    filesNeedingAttention: interesting,
+    changedImages: changedImages
+  };
   const input =
 `Localization job summary. Give a short human verdict (2-4 sentences): is it safe to ship, anything to double-check?
-${JSON.stringify(summary).slice(0, 4000)}
+${JSON.stringify(compact)}
 Return strict JSON: { "verdict": "ok" | "review", "message": "..." }`;
   try {
     const { obj } = await kie.orchestrateJson({ instructions: PERSONA, input, effort: 'low' });

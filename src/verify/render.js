@@ -9,6 +9,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { stripPhpSafe } = require('../extract/mask');
 
 const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 const MIME = { '.php': 'text/html', '.phtml': 'text/html', '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript', '.mjs': 'application/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.eot': 'application/vnd.ms-fontobject' };
@@ -21,7 +22,7 @@ function serve(root) {
       let fp = path.join(root, rel.replace(/^\/+/, ''));
       if (!fp.startsWith(root) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) { r.statusCode = 404; return r.end(); }
       const e = path.extname(fp).toLowerCase();
-      if (e === '.php' || e === '.phtml') { r.setHeader('Content-Type', 'text/html; charset=utf-8'); return r.end(fs.readFileSync(fp, 'utf8').replace(/<\?[\s\S]*?\?>/g, '')); }
+      if (e === '.php' || e === '.phtml') { r.setHeader('Content-Type', 'text/html; charset=utf-8'); return r.end(stripPhpSafe(fs.readFileSync(fp, 'utf8'))); }
       r.setHeader('Content-Type', MIME[e] || 'application/octet-stream');
       fs.createReadStream(fp).pipe(r);
     });
