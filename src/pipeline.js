@@ -194,7 +194,15 @@ async function runJob(job) {
       renderVerdict = compareRenders(ro, rt, { formKit: !!job.params.formKit });
       try { fs.rmSync(origTmp, { recursive: true, force: true }); } catch { /* noop */ }
       if (renderVerdict.verdict === 'regression') {
-        log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify({ newErrors: renderVerdict.newErrors, funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles, formLost: renderVerdict.formLost }).slice(0, 220)}`);
+        const summary = {
+          reasons: renderVerdict.reasons,
+          newErrors: (renderVerdict.newErrors || []).slice(0, 3),
+          funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles,
+          formLost: renderVerdict.formLost,
+          brokenImages: renderVerdict.brokenImages
+        };
+        if (renderVerdict.kit) summary.kit = renderVerdict.kit;
+        log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify(summary).slice(0, 280)}`);
         // Self-improving memory: a concrete regression becomes a house rule the
         // agents read on future jobs. Keep the rule generic + actionable.
         try {
@@ -202,13 +210,36 @@ async function runJob(job) {
           if (renderVerdict.newErrors && renderVerdict.newErrors.length) bits.push(`introduced new JS errors: ${renderVerdict.newErrors.slice(0, 3).join('; ')}`);
           if (renderVerdict.funnelRegressed) bits.push(`funnel depth dropped (${renderVerdict.origBubbles}→${renderVerdict.outBubbles})`);
           if (renderVerdict.formLost) bits.push('order form became unreachable');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('kitButtonUnstyled')) bits.push('kit form button rendered with default browser styling (kit CSS not scoped/linked)');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('kitInputUnstyled')) bits.push('kit form input rendered with default browser styling');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('kitPriceEmpty')) bits.push('kit form price block had no digit (agent may have erased the price)');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('kitGameImagesMissing')) bits.push('kit game cells had no background image (kit image assets missing)');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('brokenImages')) bits.push(`${renderVerdict.brokenImages} broken <img> icons (404)`);
           if (bits.length) lessons.add('structure', `A past localized landing showed a browser regression: ${bits.join('; ')}. When editing similar files, double-check the affected selectors/JS still fire and the form stays reachable.`);
         } catch { /* never let a lesson write break the job */ }
       }
-      else if (renderVerdict.verdict === 'ok') log(id, 'progress', `Проверка в браузере: всё на месте (шаги ${renderVerdict.origBubbles}→${renderVerdict.outBubbles}, форма ${renderVerdict.outForm ? 'видна' : 'нет'}, новых ошибок 0)`);
+      else if (renderVerdict.verdict === 'ok') {
+        const k = renderVerdict.kit && renderVerdict.kit.injected ? ` · kit: ${renderVerdict.kit.class || '?'}${renderVerdict.kit.formFound ? ' форма ок' : ''}${renderVerdict.kit.priceHasDigit ? ' цена ok' : ''}` : '';
+        log(id, 'progress', `Проверка в браузере: всё на месте (шаги ${renderVerdict.origBubbles}→${renderVerdict.outBubbles}, форма ${renderVerdict.outForm ? 'видна' : 'нет'}, битых картинок ${renderVerdict.brokenImages || 0}${k})`);
+      }
       else log(id, 'progress', `Проверка в браузере пропущена (${renderVerdict.note || 'нет браузера'})`);
     } catch (e) { log(id, 'warn', `Проверка в браузере: ${e.message}`); }
     report.render = renderVerdict;
+
+    // ---- 6.9 pre-flight lint ----
+    // Deterministic checks that run right before zipping: drop broken kit
+    // <img> tags, flag orphaned old form wrappers, empty kit prices, duplicate
+    // images. Cheap (no LLM), catches structural/contract bugs the agents miss.
+    try {
+      const preflight = require('./verify/preflight').run(siteRoot, job.params);
+      report.preflight = preflight;
+      if (preflight.fixed) log(id, 'progress', `Pre-flight: авто-починено ${preflight.fixed} (битые kit <img>)`);
+      for (const iss of preflight.issues) {
+        if (iss.autoFixed) continue; // already counted above
+        const tag = iss.sev === 'warn' ? 'warn' : (iss.sev === 'fix' ? 'progress' : 'progress');
+        log(id, tag, `Pre-flight ${iss.sev}: ${iss.file}: ${iss.msg}`);
+      }
+    } catch (e) { log(id, 'warn', `Pre-flight: ${e.message}`); }
 
     // ---- 7. repack + preview ----
     log(id, 'step', 'Сборка ZIP и превью…');
