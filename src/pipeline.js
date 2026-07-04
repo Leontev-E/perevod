@@ -450,6 +450,21 @@ async function processImages(id, imageFiles, siteRoot, backupDir, params, brief,
       return;
     }
 
+    // NO offer photo uploaded: never attempt to relabel/redraw a product image.
+    // product_hero (the package/jar itself) and lifestyle (a person holding the
+    // package) both depict the OLD product. GPT Image 2 cannot cleanly rewrite a
+    // brand on a small jar label, so a "relabel" pass leaves a half-changed,
+    // inconsistent brand on the same old package — worse than leaving it alone.
+    // Only pure text graphics (banners, discount %) are translated here. The
+    // right fix is for the buyer to upload the offer photo; without it, product
+    // images pass through untouched.
+    if (!hasOfferPhoto && (analysis.category === 'product_hero' || analysis.category === 'lifestyle')) {
+      left++; rec.kind = 'left-no-offer-photo';
+      log(id, 'image', `↩ ${primary.relpath} (${analysis.category}): пропущено — нет фото оффера, продукт оставлен как есть`);
+      report.images.push(rec);
+      return;
+    }
+
     // Everything with words or a brand name (lifestyle/review photos, banners,
     // product shots without an offer photo, labelled diagrams): EDIT in place so
     // the real photo stays alive — never flat-replace. Badges/decor/logos/person-
