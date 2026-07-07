@@ -45,7 +45,10 @@ async function runJob(job) {
     if (job.params.formKit) {
       try {
         const fk = injectFormKit(siteRoot, job.params, offerPhotos);
-        if (fk.ok) log(id, 'progress', `Замена формы: kit «${fk.kit}» вставлен в ${fk.file} (перенесено ${fk.hiddenFieldsCarried} скрытых полей, ${fk.extrasAdded} доп.). Стили/JS изолированы, форма пройдёт через перевод и проверку.`);
+        if (fk.ok) {
+          log(id, 'progress', `Замена формы: kit «${fk.kit}» вставлен в ${fk.file} (перенесено ${fk.hiddenFieldsCarried} скрытых полей, ${fk.extrasAdded} доп.). Стили/JS изолированы, форма пройдёт через перевод и проверку.`);
+          if (fk.assetsFailed) log(id, 'warn', `Замена формы: не скопировано ${fk.assetsFailed} ассет(ов) кита — проверьте картинки кита в браузере.`);
+        }
         else log(id, 'warn', `Замена формы пропущена: ${fk.reason}. Сайт переводится как есть.`);
       } catch (e) {
         log(id, 'warn', `Замена формы: ${e.message}. Сайт переводится как есть.`);
@@ -84,7 +87,7 @@ async function runJob(job) {
       if (nUnits === 0 && !needsPost) continue;
       const units = (proc.units || []).map(u => {
         const gid = 'g' + (gidCounter++);
-        allUnits.push({ gid, text: u.text, ctx: u.ctx, kind: u.kind });
+        allUnits.push({ gid, text: u.text, ctx: u.ctx, kind: u.kind, sec: u.sec });
         return Object.assign({ gid }, u);
       });
       perFile.push({ relpath: f.relpath, abspath: f.abspath, type: proc.type, enc: read.enc, originalText: read.text, processor: proc, units });
@@ -95,11 +98,14 @@ async function runJob(job) {
       throw new Error('В архиве не найдено переводимого контента.');
     }
 
-    // ---- 3. localization brief (GPT 5.5) ----
-    log(id, 'step', 'Изучаем лендинг и готовим план перевода…');
-    const sampleTexts = allUnits.slice(0, 300).map(u => u.text);
+    // ---- 3. localization brief + whole-site context artifact (Opus 4.8) ----
+    log(id, 'step', 'Изучаем весь лендинг и готовим план перевода…');
+    const allUnitTexts = allUnits.map(u => u.text);
     const imageNames = imageFiles.map(f => path.basename(f.relpath));
-    const brief = await controller.buildBrief(job.params, sampleTexts, imageNames);
+    const brief = await controller.buildBrief(job.params, allUnitTexts, imageNames);
+    if (brief && brief.via) log(id, 'progress', brief.via === 'artifact'
+      ? `План: единый контекст по всему сайту (имён в глоссарии: ${Object.keys(brief.glossary || {}).length}, терминов: ${(brief.terminology || []).length})`
+      : 'План: базовый бриф (единый контекст недоступен — работаем как раньше)');
     const pricingMode = computePricingMode(job.params);
     brief.pricingMode = pricingMode;
     if (!brief.localeRules) brief.localeRules = {};
@@ -111,6 +117,13 @@ async function runJob(job) {
     job.brief = brief;
 
     // ---- 4. translate all text (Claude Sonnet 5 -> GPT 5.5 fallback) ----
+    // Quality mode: run the MAIN batch translation on Opus 4.8 (premium offers).
+    // Off by default (Sonnet 5 workhorse). Threaded via params so textAgent picks
+    // it up per call; the strong single-fragment tier is Opus 4.8 regardless.
+    if (job.params.qualityMode || cfg.qualityModeDefault) {
+      job.params.qualityModel = cfg.kie.claudeQualityModel;
+      log(id, 'progress', 'Режим качества: основной перевод на Opus 4.8');
+    }
     log(id, 'step', 'Переводим и локализуем тексты под ГЕО…');
     const { translations, missing } = await textAgent.translateUnits(allUnits, job.params, brief, (ev) => log(id, ev.type, ev.msg));
     if (missing.length) log(id, 'warn', `Не переведено фрагментов: ${missing.length} (оставлены как есть)`);
@@ -130,6 +143,26 @@ async function runJob(job) {
         if (after !== before) { translations[gid] = after; hits++; }
       }
       if (hits) log(id, 'progress', `Детерминированная замена бренда: ${hits} фрагм.`);
+    }
+
+    // Deterministic CONSISTENCY enforcement (model-independent contract). The
+    // artifact's person glossary + contextInvariant terminology are prompt hints
+    // during translation; here we ENFORCE them — wherever a source name/term
+    // survived VERBATIM into a translation, rewrite it to the ONE canonical
+    // target so every occurrence matches, whichever tier translated it. This is
+    // the deterministic backstop for the "same person, two names" bug.
+    {
+      const enf = enforceConsistency(translations, brief, job.params);
+      if (enf.hits) log(id, 'progress', `Согласованность (детерм.): ${enf.hits} правок имён/терминов`);
+      // Consistency VERIFICATION (measured invariant): TM integrity + residual
+      // brand/name leaks after enforcement. Reported to the human sign-off.
+      const vc = verifyConsistency(allUnits, translations, brief, job.params);
+      report.consistency = vc;
+      if (vc.tmViolations || vc.offerLeaks || vc.glossaryResidue) {
+        log(id, 'warn', `Проверка согласованности: TM-расхождений ${vc.tmViolations}, утечек бренда ${vc.offerLeaks}, остаток имён ${vc.glossaryResidue} — см. отчёт`);
+      } else {
+        log(id, 'progress', `Проверка согласованности: чисто (уник. строк ${vc.uniqueSources}, TM-расхождений 0, утечек бренда 0)`);
+      }
     }
 
     // free-mode: kill leftover "with a discount" wording (contradicts a free offer)
@@ -189,8 +222,8 @@ async function runJob(job) {
       const origTmp = path.join(dir, '_render_orig');
       try { fs.rmSync(origTmp, { recursive: true, force: true }); } catch { /* noop */ }
       const oroot = extractZip(path.join(dir, 'upload.zip'), origTmp);
-      const ro = await renderCheck(oroot, path.join(dir, 'render_orig.png'));
-      const rt = await renderCheck(siteRoot, path.join(dir, 'render_out.png'));
+      const ro = await renderCheck(oroot, path.join(dir, 'render_orig.png'), { geo: job.params.country });
+      const rt = await renderCheck(siteRoot, path.join(dir, 'render_out.png'), { geo: job.params.country });
       renderVerdict = compareRenders(ro, rt, { formKit: !!job.params.formKit });
       try { fs.rmSync(origTmp, { recursive: true, force: true }); } catch { /* noop */ }
       if (renderVerdict.verdict === 'regression') {
@@ -199,7 +232,8 @@ async function runJob(job) {
           newErrors: (renderVerdict.newErrors || []).slice(0, 3),
           funnel: renderVerdict.origBubbles + '→' + renderVerdict.outBubbles,
           formLost: renderVerdict.formLost,
-          brokenImages: renderVerdict.brokenImages
+          brokenImages: renderVerdict.brokenImages,
+          submit: renderVerdict.submit
         };
         if (renderVerdict.kit) summary.kit = renderVerdict.kit;
         log(id, 'warn', `⚠ Проверка в браузере: что-то могло поехать — ${JSON.stringify(summary).slice(0, 280)}`);
@@ -215,6 +249,8 @@ async function runJob(job) {
           if (renderVerdict.reasons && renderVerdict.reasons.includes('kitPriceEmpty')) bits.push('kit form price block had no digit (agent may have erased the price)');
           if (renderVerdict.reasons && renderVerdict.reasons.includes('kitGameImagesMissing')) bits.push('kit game cells had no background image (kit image assets missing)');
           if (renderVerdict.reasons && renderVerdict.reasons.includes('brokenImages')) bits.push(`${renderVerdict.brokenImages} broken <img> icons (404)`);
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('submitDoesNotPost')) bits.push('the lead form no longer posts (submit fired NO fetch/XHR/form POST) — a swap/edit likely detached the original submit handler bound by the old form id/class');
+          if (renderVerdict.reasons && renderVerdict.reasons.includes('submitMissingSub')) bits.push('the lead POST no longer carries the sub1..5 tracking fields');
           if (bits.length) lessons.add('structure', `A past localized landing showed a browser regression: ${bits.join('; ')}. When editing similar files, double-check the affected selectors/JS still fire and the form stays reachable.`);
         } catch { /* never let a lesson write break the job */ }
       }
@@ -250,7 +286,8 @@ async function runJob(job) {
     const summary = {
       files: report.files.map(f => ({ f: f.relpath, changed: f.changed, rolledBack: f.rolledBack, structure: f.structureOk, verdict: f.controllerVerdict })),
       images: report.images.map(i => ({ f: i.relpath, changed: i.changed })),
-      missing: missing.length
+      missing: missing.length,
+      consistency: report.consistency || null
     };
     const signoff = await controller.finalSignoff(summary);
 
@@ -571,6 +608,106 @@ function replaceBrands(text, names, offerName) {
   return out;
 }
 
+// Deterministic consistency enforcement: rewrite every translation so that any
+// SOURCE person-name mention (from the artifact glossary) or contextInvariant
+// term that survived VERBATIM into the translation becomes the ONE canonical
+// target. Unicode word-boundary matched, longest source first. Mutates
+// `translations` in place. Returns { hits }.
+function enforceConsistency(translations, brief, params) {
+  const b = brief || {};
+  const gl = (b.glossary && typeof b.glossary === 'object') ? b.glossary : {};
+  const rules = [];
+  const brandLike = (n) => /\s/.test(n) || /\d/.test(n) || /[A-ZА-Я].*[A-ZА-Я]/.test(n);
+  for (const src of Object.keys(gl)) {
+    const s = String(src || '').trim(), t = String(gl[src] || '').trim();
+    // Only enforce MULTI-WORD person mentions verbatim — a full name is distinctive
+    // and won't collide with a common target-language word. A single first name
+    // (e.g. "Vera"/"Rosa" — also words in Romance/Slavic targets) relies on the
+    // per-batch prompt hint + temperature 0, never a blind replace, so we never
+    // corrupt "Vera storia" -> "Giulia storia". Also skip when the target already
+    // embeds the source as a word (avoids a no-op + a false verify leak).
+    if (/\s/.test(s) && s.length >= 4 && t && s.toLowerCase() !== t.toLowerCase() && !boundaryRe(s).test(t)) rules.push({ s, t });
+  }
+  for (const term of (Array.isArray(b.terminology) ? b.terminology : [])) {
+    if (!term || !term.contextInvariant) continue;
+    const s = String(term.src || '').trim(), t = String(term.target || '').trim();
+    // Multi-word or clearly distinctive (len>=6) terms only — a short single word
+    // ("New") is too collision-prone to blind-replace.
+    if ((/\s/.test(s) || s.length >= 6) && t && s.toLowerCase() !== t.toLowerCase() && !boundaryRe(s).test(t)) rules.push({ s, t });
+  }
+  // Offer-name leaks: replace a source offer name that survived verbatim with the
+  // new offer name at any frequency (the freq>=3 replaceBrands guard above misses
+  // a brand mentioned once or twice). Guarded to BRAND-LIKE tokens (multi-word /
+  // has a digit / multi-caps) & len>=4 — mirroring filterBrandNames — so a generic
+  // short word ("Gel"/"Pro"/"Care") is never blind-replaced.
+  const offer = String((params && params.offerName) || '').trim();
+  if (offer) for (const src of (Array.isArray(b.sourceOfferNames) ? b.sourceOfferNames : [])) {
+    const s = String(src || '').trim();
+    if (s.length >= 4 && brandLike(s) && s.toLowerCase() !== offer.toLowerCase() && !boundaryRe(s).test(offer)) rules.push({ s, t: offer });
+  }
+  if (!rules.length) return { hits: 0 };
+  rules.sort((a, c) => c.s.length - a.s.length); // longest source wins over a substring
+  let hits = 0;
+  for (const gid of Object.keys(translations)) {
+    let v = translations[gid];
+    if (typeof v !== 'string' || !v) continue;
+    const before = v;
+    for (const r of rules) {
+      let re;
+      // Unicode-aware boundaries so we only replace a standalone token that was
+      // left untranslated (never a substring inside another word).
+      try { re = new RegExp('(?<![\\p{L}\\p{N}])' + escapeRe(r.s) + '(?![\\p{L}\\p{N}])', 'gu'); }
+      catch { re = new RegExp('\\b' + escapeRe(r.s) + '\\b', 'g'); }
+      v = v.replace(re, r.t);
+    }
+    if (v !== before) { translations[gid] = v; hits++; }
+  }
+  return { hits };
+}
+
+// Word-boundary (Unicode) matcher for a literal token; used by the consistency verifier.
+function boundaryRe(tok) {
+  const esc = escapeRe(tok);
+  try { return new RegExp('(?<![\\p{L}\\p{N}])' + esc + '(?![\\p{L}\\p{N}])', 'u'); }
+  catch { return new RegExp('\\b' + esc + '\\b'); }
+}
+
+// Deterministic consistency VERIFICATION (no mutation): measures the invariants
+// after enforcement so the human sign-off knows they held.
+//  - tmViolations: identical source strings that ended with DIFFERENT translations
+//    (must be 0 — the translation memory guarantees it).
+//  - offerLeaks: translations still containing a source offer name verbatim.
+//  - glossaryResidue: translations still containing a source person mention verbatim.
+function verifyConsistency(allUnits, translations, brief, params) {
+  const b = brief || {};
+  const bySrc = new Map();
+  for (const u of (allUnits || [])) {
+    const t = translations[u.gid];
+    if (t == null) continue;
+    let e = bySrc.get(u.text); if (!e) { e = new Set(); bySrc.set(u.text, e); }
+    e.add(t);
+  }
+  let tmViolations = 0, uniqueSources = 0;
+  for (const set of bySrc.values()) { uniqueSources++; if (set.size > 1) tmViolations++; }
+  // Exclude a source token that legitimately survives because it is a WORD-part of
+  // its own canonical target (offer "Keto Slim" contains source "Keto"; person
+  // target "Ivan Petrov" contains mention "Ivan") — otherwise every clean job
+  // would report a false leak and cry-wolf the human sign-off.
+  const offer = String((params && params.offerName) || '');
+  const gl = (b.glossary && typeof b.glossary === 'object') ? b.glossary : {};
+  const offerRes = (Array.isArray(b.sourceOfferNames) ? b.sourceOfferNames : [])
+    .map(s => String(s || '').trim()).filter(s => s.length >= 3 && !boundaryRe(s).test(offer)).map(boundaryRe);
+  const memRes = Object.keys(gl)
+    .map(s => String(s || '').trim()).filter(s => s.length >= 3 && !boundaryRe(s).test(String(gl[s] || ''))).map(boundaryRe);
+  let offerLeaks = 0, glossaryResidue = 0;
+  for (const gid of Object.keys(translations)) {
+    const v = translations[gid]; if (typeof v !== 'string') continue;
+    if (offerRes.some(re => re.test(v))) offerLeaks++;
+    if (memRes.some(re => re.test(v))) glossaryResidue++;
+  }
+  return { uniqueSources, totalTranslated: Object.keys(translations).length, tmViolations, offerLeaks, glossaryResidue };
+}
+
 function loadOfferPhotos(dir) {
   const out = [];
   try {
@@ -641,4 +778,4 @@ function collectReviewImages(allFiles, siteRoot) {
   return out;
 }
 
-module.exports = { runJob };
+module.exports = { runJob, enforceConsistency, verifyConsistency };

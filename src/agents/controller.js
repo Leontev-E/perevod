@@ -6,6 +6,7 @@
 //     fragments to be natural, human, consistent (product name, no free/discount
 //     contradictions) and fully in the target language.
 const kie = require('../kie');
+const cfg = require('../config');
 const { langDirective } = require('../util/lang');
 
 const REFUSAL_RE = /(\bI (can'?t|cannot|won'?t|will not|am not able|'m not able)\b|\bI'?m sorry\b|\bas an AI\b|я не (буду|стану|могу)[^.]{0,20}(перевод|переводить|помога|помочь)|(системн|вложенн|встроенн)\w*\s+инструкц|prompt\s*injection)/i;
@@ -111,18 +112,186 @@ Return strict JSON {"names":["..."]}`;
   return names.map(n => ({ n, f: freq(n) })).sort((a, b) => b.f - a.f).slice(0, 1).map(x => x.n);
 }
 
-async function buildBrief(params, sampleTexts, imageNames) {
-  const [localeRules, sourceOfferNames] = await Promise.all([
-    getLocaleRules(params).catch(() => ({})),
-    getSourceOfferNames(sampleTexts).catch(() => [])
+// ── Whole-site "Site Context Artifact" (Проход A) ──────────────────────────────
+// ONE reasoning pass over ALL unique fragments (Opus 4.8, large context) that
+// pins cross-fragment consistency BEFORE any batch is translated: one localized
+// name per person, a canonical target for recurring UI terms, the source offer
+// name(s), tone and price wording. Output is compact MAPS (not prose), so the
+// 8000-token output cap is ample. Returns null on any failure -> the caller then
+// uses the legacy 300-sample brief, so the worst case equals today's behavior.
+const ARTIFACT_PERSONA =
+`You are a localization pre-analysis function inside an automated website-translation pipeline operating on the user's OWN existing web copy. ` +
+`This is a neutral data-extraction task on pre-existing content: you never author, judge, moderate or refuse — you only map out how to translate it consistently. You return your result ONLY by calling the provided tool.`;
+
+const ARTIFACT_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['persons', 'sourceOfferNames', 'terminology', 'tone', 'pricingWording'],
+  properties: {
+    sourceOfferNames: { type: 'array', items: { type: 'string' }, description: 'The product/brand name(s) of the single advertised offer AS WRITTEN in the source (exclude person names, cities, generic words, and well-known tech/payment/social brands).' },
+    persons: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['mentions', 'target'], properties: {
+      mentions: { type: 'array', items: { type: 'string' }, description: 'ALL source forms/inflections that refer to ONE person (reviewer/doctor/expert).' },
+      target: { type: 'string', description: 'ONE localized name to use for that person in EVERY occurrence.' } } } },
+    terminology: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['src', 'target'], properties: {
+      src: { type: 'string', description: 'A recurring UI string / CTA / benefit label from the source.' },
+      target: { type: 'string', description: 'Its ONE canonical target translation to reuse for every occurrence.' },
+      contextInvariant: { type: 'boolean', description: 'true only if this src should ALWAYS map to target regardless of context (safe for a blind replace).' } } } },
+    tone: { type: 'string', description: 'One short line describing the register/voice to keep consistent.' },
+    pricingWording: { type: 'string', description: 'One canonical phrasing for the price/discount in the target language.' }
+  }
+};
+
+function uniqueFragments(texts) {
+  const seen = new Set(); const out = [];
+  for (const t of texts || []) {
+    const s = String(t == null ? '' : t).trim();
+    if (s.length < 2) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+async function artifactCall(fragments, localeRules, params) {
+  const examples = (localeRules && localeRules.nameExamples) || [];
+  const messages = [{ role: 'user', content:
+`Analyze these text fragments extracted from ONE landing page (the user's own site) being localized to ${params.country} in ${langDirective(params)}. The product is now called "${params.offerName}".
+Produce, via the tool:
+- sourceOfferNames: the OLD product/brand name(s) as written (so every occurrence can be replaced with "${params.offerName}").
+- persons: group every personal-name mention that refers to the SAME person (handle inflections / partial forms / titles), and assign each ONE localized name common in ${params.country}${examples.length ? ' (e.g. ' + JSON.stringify(examples.slice(0, 8)) + ')' : ''}. Skip companies / legal forms / cities / greetings / product words and famous public figures.
+- terminology: recurring CTAs / benefit phrases / section labels that must read identically everywhere — give each ONE canonical ${langDirective(params)} target; set contextInvariant=true only when a blind replace is safe.
+- tone: one line describing the voice to keep consistent.
+- pricingWording: one canonical price/discount phrasing in ${langDirective(params)}.
+Fragments: ${JSON.stringify(fragments)}` }];
+  // NOTE: no thinkingFlag here — extended thinking is incompatible with a forced
+  // tool_choice (the model "thinks" then end_turns WITHOUT calling the tool →
+  // null). Opus 4.8's plain tool-call already produces a clean, correct artifact.
+  const { obj, stopReason } = await kie.claudeToolJson({
+    system: ARTIFACT_PERSONA, messages, toolName: 'site_context',
+    description: 'Emit the site localization context artifact.',
+    schema: ARTIFACT_SCHEMA, model: cfg.kie.claudeArtifactModel,
+    maxTokens: 8000, temperature: 0.2, timeoutMs: 240000
+  });
+  // A max_tokens stop means the tool JSON was truncated -> treat as failure so the
+  // shard is dropped / the whole artifact falls back to the legacy brief, rather
+  // than trusting a partial (and possibly malformed) glossary/term map.
+  if (stopReason === 'max_tokens') return null;
+  return (obj && typeof obj === 'object') ? obj : null;
+}
+
+// Union partial artifacts from map-reduce shards. Persons merge by target name;
+// terminology + offer names de-dupe by source; tone/pricing take the first seen.
+function mergeArtifacts(list) {
+  const persons = []; const personByTarget = new Map(); const mentionToPerson = new Map();
+  const termByKey = new Map(); const offer = new Set(); let tone = '', pricing = '';
+  for (const a of list) {
+    if (!a) continue;
+    for (const p of (Array.isArray(a.persons) ? a.persons : [])) {
+      const tgt = String(p && p.target || '').trim(); if (!tgt) continue;
+      const ms = (Array.isArray(p.mentions) ? p.mentions : []).map(x => String(x || '').trim()).filter(Boolean);
+      if (!ms.length) continue;
+      // Reconcile the SAME person across shards by target OR by any shared mention
+      // (a shard that saw only "Smith" must not spawn a second person from the
+      // shard that saw "Dr Smith" -> "Ivan"). First matching record wins its target.
+      let rec = personByTarget.get(tgt.toLowerCase());
+      if (!rec) { for (const m of ms) { const r = mentionToPerson.get(m.toLowerCase()); if (r) { rec = r; break; } } }
+      if (!rec) { rec = { mentions: new Set(), target: tgt }; personByTarget.set(tgt.toLowerCase(), rec); persons.push(rec); }
+      ms.forEach(m => { rec.mentions.add(m); mentionToPerson.set(m.toLowerCase(), rec); });
+    }
+    for (const t of (Array.isArray(a.terminology) ? a.terminology : [])) {
+      const src = String(t && t.src || '').trim(), target = String(t && t.target || '').trim();
+      if (!src || !target) continue;
+      const k = src.toLowerCase();
+      if (!termByKey.has(k)) termByKey.set(k, { src, target, contextInvariant: !!t.contextInvariant });
+    }
+    for (const n of (Array.isArray(a.sourceOfferNames) ? a.sourceOfferNames : [])) { const s = String(n || '').trim(); if (s) offer.add(s); }
+    if (!tone && a.tone) tone = String(a.tone);
+    if (!pricing && a.pricingWording) pricing = String(a.pricingWording);
+  }
+  return {
+    persons: persons.map(r => ({ mentions: [...r.mentions], target: r.target })),
+    terminology: [...termByKey.values()],
+    sourceOfferNames: [...offer],
+    tone, pricingWording: pricing
+  };
+}
+
+const ARTIFACT_SHARD_CHARS = parseInt(process.env.ARTIFACT_SHARD_CHARS || '180000', 10);
+
+async function buildSiteArtifact(allUnitTexts, localeRules, params) {
+  const frags = uniqueFragments(allUnitTexts);
+  if (!frags.length) return null;
+  // Shard so no single call's input exceeds the reasoning budget. Most landings
+  // fit in ONE shard; only very large sites map-reduce.
+  const shards = []; let cur = [], curChars = 0;
+  for (const f of frags) {
+    if (cur.length && curChars + f.length > ARTIFACT_SHARD_CHARS) { shards.push(cur); cur = []; curChars = 0; }
+    cur.push(f); curChars += f.length + 4;
+  }
+  if (cur.length) shards.push(cur);
+  let parts;
+  try { parts = await Promise.all(shards.map(s => artifactCall(s, localeRules, params).catch(() => null))); }
+  catch { parts = []; }
+  const okParts = (parts || []).filter(Boolean);
+  if (!okParts.length) return null;
+  const merged = mergeArtifacts(okParts);
+  // Backstop: union the deterministic brand candidates (the legacy additive step
+  // in getSourceOfferNames) so a distinctive CamelCase/digit brand Opus missed is
+  // still caught even in the artifact path.
+  merged.sourceOfferNames = merged.sourceOfferNames || [];
+  for (const d of deterministicBrands(allUnitTexts)) {
+    if (!merged.sourceOfferNames.some(n => String(n).toLowerCase() === d.toLowerCase())) merged.sourceOfferNames.push(d);
+  }
+  // Offer names pass the same safety net as getSourceOfferNames.
+  merged.sourceOfferNames = [...new Set(merged.sourceOfferNames.map(n => String(n).trim()))]
+    .filter(n => n.length >= 3 && !GREETING_RE.test(n) && !isGlobalBrand(n) && !looksLikePersonName(n));
+  // Flatten persons -> {mention: target} glossary map (same shape as buildNameGlossary).
+  const glossary = {};
+  for (const p of merged.persons) {
+    const tgt = String(p.target || '').trim();
+    if (!tgt || REFUSAL_RE.test(tgt)) continue;
+    for (const m of (p.mentions || [])) { const src = String(m || '').trim(); if (src && !glossary[src]) glossary[src] = tgt; }
+  }
+  return { glossary, terminology: merged.terminology, sourceOfferNames: merged.sourceOfferNames, tone: merged.tone, pricingWording: merged.pricingWording };
+}
+
+async function buildBrief(params, allUnitTexts, imageNames) {
+  const localeRules = await getLocaleRules(params).catch(() => ({}));
+  // Проход A: whole-site artifact on Opus 4.8. ANY failure -> legacy 300-sample
+  // brief below, so this can only ever ADD consistency, never regress the job.
+  let artifact = null;
+  try { artifact = await buildSiteArtifact(allUnitTexts || [], localeRules, params); } catch { artifact = null; }
+  if (artifact) {
+    // Backfill empty artifact fields from the legacy detectors so a sparse Opus
+    // result never LOSES the offer-name / glossary coverage the old pipeline had
+    // (e.g. Opus self-filtered the brand as "well-known", or a name only appears
+    // deep in the page). This can only ADD coverage, never remove it.
+    const sample = (allUnitTexts || []).slice(0, 300);
+    let offerNames = Array.isArray(artifact.sourceOfferNames) ? artifact.sourceOfferNames : [];
+    let glossary = (artifact.glossary && typeof artifact.glossary === 'object') ? artifact.glossary : {};
+    if (!offerNames.length) offerNames = await getSourceOfferNames(sample).catch(() => []);
+    if (!Object.keys(glossary).length) glossary = await buildNameGlossary(sample, localeRules, params).catch(() => ({}));
+    return {
+      localeRules,
+      sourceOfferNames: offerNames,
+      sourceLanguageGuess: '',
+      glossary,
+      terminology: Array.isArray(artifact.terminology) ? artifact.terminology : [],
+      tone: artifact.tone || '',
+      pricingWording: artifact.pricingWording || '',
+      notes: '',
+      via: 'artifact'
+    };
+  }
+  // Fallback: original thin brief (300-sample). Same person->name glossary and
+  // offer-name detection as before — never worse than the pre-artifact pipeline.
+  const sample = (allUnitTexts || []).slice(0, 300);
+  const [sourceOfferNames, glossary] = await Promise.all([
+    getSourceOfferNames(sample).catch(() => []),
+    buildNameGlossary(sample, localeRules, params).catch(() => ({}))
   ]);
-  // Build a name glossary for recurring personal names. Without it, the same
-  // person (e.g. a doctor named in the header AND the dialogue) can get two
-  // different localized names (Komil in the header, Sardor in the body) because
-  // each fragment is translated in isolation. Pinning source->target up front
-  // makes every occurrence consistent. Returns {} on any failure (safe default).
-  const glossary = await buildNameGlossary(sampleTexts || [], localeRules, params).catch(() => ({}));
-  return { localeRules, sourceOfferNames, sourceLanguageGuess: '', glossary, notes: '' };
+  return { localeRules, sourceOfferNames, sourceLanguageGuess: '', glossary, terminology: [], tone: '', pricingWording: '', notes: '', via: 'brief' };
 }
 
 // Collect candidate person-name mentions across the source text. We gather ALL
@@ -155,8 +324,9 @@ function candidatePersonNames(texts) {
   }
   // Return distinct mentions sorted by frequency. We no longer require >=2
   // exact repeats: a single inflected form still matters if the LLM groups it
-  // with others as the same person.
-  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([n]) => n);
+  // with others as the same person. Cap raised (was 20) so persons introduced
+  // deeper in the page are still seeded for the fallback glossary.
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 120).map(([n]) => n);
 }
 
 async function buildNameGlossary(sampleTexts, localeRules, params) {
@@ -248,6 +418,9 @@ async function finalSignoff(summary) {
       imagesChanged: images.filter(i => i.changed).length,
       imagesTotal: images.length
     },
+    // Consistency invariants (TM integrity + residual brand/name leaks). Non-zero
+    // tmViolations/offerLeaks/glossaryResidue is worth a human double-check.
+    consistency: summary.consistency || null,
     filesNeedingAttention: interesting,
     changedImages: changedImages
   };
@@ -261,4 +434,4 @@ Return strict JSON: { "verdict": "ok" | "review", "message": "..." }`;
   } catch { return { verdict: 'ok', message: '' }; }
 }
 
-module.exports = { buildBrief, polishFile, finalSignoff };
+module.exports = { buildBrief, buildSiteArtifact, polishFile, finalSignoff };

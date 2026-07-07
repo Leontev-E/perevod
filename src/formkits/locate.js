@@ -85,8 +85,14 @@ function findLeadForm(doc) {
     const sc = score(f);
     if (sc > bestScore) { best = f; bestScore = sc; }
   }
-  // Require at least an action hint + a phone field, else it's not a lead form.
-  if (bestScore < 5) return null;
+  if (!best) return null;
+  // Accept a strong score (>=5, e.g. api.php + phone) OR any form that clearly is
+  // a lead form by shape — a phone field plus a sub1..5 tracking field — even when
+  // it posts via AJAX to a custom route (no api.php in action). This catches
+  // AJAX-posting landings the old score-only threshold rejected.
+  const strong = bestScore >= 5;
+  const phoneSub = hasInputNamed(best, /^phone$/i) && hasInputNamed(best, /^sub[1-5]$/i);
+  if (!strong && !phoneSub) return null;
   return best;
 }
 
@@ -114,7 +120,19 @@ function nodeHasFunnel(node) {
   return has;
 }
 
-function findRegion(form) {
+// The <body> element's source span (used to cap how large the replaced region
+// may grow). Falls back to null when absent (fragment) — caller uses html length.
+function bodySpan(doc) {
+  let span = null;
+  (function walk(n) {
+    if (span) return;
+    if (n.tagName === 'body' && n.sourceCodeLocation) { span = n.sourceCodeLocation; return; }
+    for (const c of (n.childNodes || [])) walk(c);
+  })(doc);
+  return span;
+}
+
+function findRegion(form, maxSize) {
   // The form's own span:
   const formLoc = form.sourceCodeLocation;
   if (!formLoc) return null;
@@ -124,7 +142,6 @@ function findRegion(form) {
   // contains a funnel-root block (game + form as one unit), OR (b) is itself a
   // named order-form wrapper (so the old price/title/coupon above the form are
   // replaced together with the form, not left dangling above the kit).
-  let wrapperFound = false;
   let node = form.parentNode;
   while (node) {
     const loc = node.sourceCodeLocation;
@@ -136,9 +153,12 @@ function findRegion(form) {
     const isWrapper = FORM_WRAPPER_RE.test(cls) || FORM_WRAPPER_RE.test(id);
     const hasFunnel = nodeHasFunnel(node);
     if ((hasFunnel || isWrapper) && loc) {
+      // SAFETY: never adopt an ancestor bigger than maxSize (a fraction of
+      // <body>). Prevents a high-in-the-tree wrapper/funnel class from making
+      // the kit replace half the page (the "swallow the whole body" risk).
+      if (maxSize && (loc.endOffset - loc.startOffset) > maxSize) { node = node.parentNode; continue; }
       start = loc.startOffset;
       end = loc.endOffset;
-      wrapperFound = true;
       // Once we adopt a named form-wrapper, stop — going higher risks
       // swallowing the whole <body>. A funnel match can still climb one more
       // level in case the wrapper itself is nested, but a wrapper match is a
@@ -156,7 +176,13 @@ function locateInSource(source) {
   const { prologue, html, restore, doc, docOffset } = parsed;
   const form = findLeadForm(doc);
   if (!form) return { found: false };
-  const region = findRegion(form);
+  // Cap the replaced region at 80% of <body> so a kit can never swallow the whole
+  // page, while still allowing a legit order-wrapper that dominates a short
+  // landing (60% was collapsing those to the bare <form>, leaving the old
+  // price/title above the kit).
+  const bs = bodySpan(doc);
+  const bodySize = bs ? (bs.endOffset - bs.startOffset) : html.length;
+  const region = findRegion(form, Math.floor(bodySize * 0.8));
   if (!region) return { found: false };
   // The offsets are in the parsed `html`; the file source has the prologue in
   // front. If we masked PHP, the masked html is a different string than the

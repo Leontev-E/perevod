@@ -22,8 +22,17 @@ const config = {
     claudeUrl: 'https://api.kie.ai/claude/v1/messages',
     claudeModel: process.env.KIE_CLAUDE_MODEL || 'claude-sonnet-5',
     // stronger model, tried on the hardest single fragments Sonnet 5 can't
-    // resolve (quality tier). Empty string disables it. (verified id on kie.ai)
-    claudeStrongModel: process.env.KIE_CLAUDE_STRONG_MODEL || 'claude-opus-4-7',
+    // resolve (quality tier). Empty string disables it. Opus 4.8 verified live
+    // on kie.ai as `claude-opus-4-8` (2026-07-07; slower, so used selectively).
+    claudeStrongModel: process.env.KIE_CLAUDE_STRONG_MODEL || 'claude-opus-4-8',
+    // Whole-site "Site Context Artifact" pass: reasons over ALL fragments at once
+    // to pin one-name-per-person, terminology, tone & offer name. Opus 4.8 (large
+    // context) is the point of this pass; its OUTPUT is compact maps, not prose,
+    // so the 8000-token output cap is comfortable.
+    claudeArtifactModel: process.env.KIE_CLAUDE_ARTIFACT_MODEL || 'claude-opus-4-8',
+    // Optional per-job "quality mode": run the MAIN batch translation on Opus 4.8
+    // instead of Sonnet 5 (premium offers). Slower/pricier — off by default.
+    claudeQualityModel: process.env.KIE_CLAUDE_QUALITY_MODEL || 'claude-opus-4-8',
     // image jobs
     createTaskUrl: 'https://api.kie.ai/api/v1/jobs/createTask',
     recordInfoUrl: 'https://api.kie.ai/api/v1/jobs/recordInfo',
@@ -48,11 +57,16 @@ const config = {
   maxUploadMb: parseInt(process.env.MAX_UPLOAD_MB || '80', 10),
   maxImages: parseInt(process.env.MAX_IMAGES || '60', 10),        // hard cap on image edits per job
   textBatchChars: parseInt(process.env.TEXT_BATCH_CHARS || '6000', 10),
+  // Deterministic translation: temperature 0 makes a repeated source string
+  // translate identically everywhere (kills tone/wording drift). Overridable.
+  textTemperature: (() => { const v = parseFloat(process.env.TEXT_TEMPERATURE); return Number.isFinite(v) ? v : 0; })(),
   claudeConcurrency: parseInt(process.env.CLAUDE_CONCURRENCY || '4', 10),
   imageConcurrency: parseInt(process.env.IMAGE_CONCURRENCY || '3', 10),
 
   // Feature toggles (can be overridden per-job from the form)
   translateImagesDefault: true,
+  // Per-job "quality mode" (Opus 4.8 for the main translation) default. Off = Sonnet 5.
+  qualityModeDefault: /^(1|true|yes|on)$/i.test(process.env.QUALITY_MODE || ''),
 
   phpBin: process.env.PHP_BIN || 'php'
 };

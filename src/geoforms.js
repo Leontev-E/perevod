@@ -37,6 +37,13 @@ function adaptForms(content, type, params, localeRules) {
   const nativeName = nativeNameRaw.toLowerCase();
   const prefix = (localeRules && localeRules.phonePrefix) || '';
   const changes = [];
+  // intl-tel-input (or a similar phone widget) OWNS the tel field's value/format.
+  // Writing a raw "+prefix" into value/placeholder double-prefixes or corrupts
+  // its hidden full-number, so when it's present we ONLY patch initialCountry
+  // (below) and leave the widget-owned tel field's value untouched. Detect by an
+  // actual INIT/USAGE call (not a mere bundled CSS/class reference), else we'd
+  // wrongly skip the prefix on pages that only ship the library.
+  const hasIntlTel = /intlTelInput\s*\(|initialCountry\s*:|defaultCountry\s*:|\.setCountry\s*\(/i.test(content);
 
   const selects = [], inputs = [];
   (function walk(n) {
@@ -79,13 +86,20 @@ function adaptForms(content, type, params, localeRules) {
     const typ = (getAttr(inp, 'type') || '').toLowerCase();
     const val = getAttr(inp, 'value');
     const ph = getAttr(inp, 'placeholder');
-    // phone prefix
+    // phone prefix. When a phone widget is present we skip ONLY the visible tel
+    // field it owns (typ==='tel'); a HIDDEN phone_code/dialcode tracking field
+    // must still be set to the target prefix.
     if (prefix && (typ === 'tel' || /phone|tel|телефон|phone_code|dialcode/.test(name))) {
-      if (val != null && /^\s*\+?\d[\d\s()-]{0,6}$/.test(val)) { setAttr(inp, 'value', prefix); changes.push('phone.value=' + prefix); }
-      if (ph != null && /^\s*\+?\d/.test(ph)) { setAttr(inp, 'placeholder', ph.replace(/^\s*\+?\d[\d\s()-]*/, prefix + ' ')); }
+      const widgetOwned = hasIntlTel && typ === 'tel';
+      if (!widgetOwned) {
+        if (val != null && /^\s*\+?\d[\d\s()-]{0,6}$/.test(val)) { setAttr(inp, 'value', prefix); changes.push('phone.value=' + prefix); }
+        if (ph != null && /^\s*\+?\d/.test(ph)) { setAttr(inp, 'placeholder', ph.replace(/^\s*\+?\d[\d\s()-]*/, prefix + ' ')); }
+      }
     }
-    // hidden country code
-    if (/^country$|country_code|geo$/.test(name) && val != null && /^[a-z]{2}$/i.test(val)) {
+    // hidden country code — anchored, but allowing the common arbitrage prefixes
+    // (sub_geo, user_geo, billing_country_code, …) while still rejecting unrelated
+    // names like "geolocation"/"category".
+    if (/^(?:\w*_)?(?:country|country_code|geo)$/.test(name) && val != null && /^[a-z]{2}$/i.test(val)) {
       setAttr(inp, 'value', params.country.toUpperCase()); changes.push('hidden country=' + params.country.toUpperCase());
     }
   }

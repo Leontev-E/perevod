@@ -29,9 +29,9 @@ function extractContract(regionHtml) {
     if (n.tagName === 'form') { form = n; return; }
     for (const c of (n.childNodes || [])) walk(c);
   })(doc);
-  if (!form) return { action: '', hidden: [] };
+  if (!form) return { action: '', method: '', enctype: '', hidden: [] };
 
-  const action = (form.attrs || []).find(a => a.name === 'action');
+  const getA = (nm) => { const a = (form.attrs || []).find(x => x.name === nm); return a ? a.value : ''; };
   const hidden = [];
   (function walk(n) {
     if (n.tagName === 'input') {
@@ -43,7 +43,14 @@ function extractContract(regionHtml) {
     }
     for (const c of (n.childNodes || [])) walk(c);
   })(form);
-  return { action: action ? action.value : '', hidden };
+  return { action: getA('action'), method: getA('method'), enctype: getA('enctype'), hidden };
+}
+
+// Full HTML-attribute escaping — a hidden value can contain &, <, >, or " (e.g. a
+// tracking token or a URL with query params); escaping only " left the others to
+// break the attribute or inject markup.
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // Render hidden inputs back to HTML strings, skipping names the kit already ships.
@@ -56,7 +63,9 @@ function hiddenInputsHtml(hidden, skipNames) {
     if (!name) continue;
     if (skip.has(name) || seen.has(name)) continue;  // kit already has sub1..5 etc.
     seen.add(name);
-    const attrs = Object.keys(h).map(k => `${k}="${String(h[k]).replace(/"/g, '&quot;')}"`).join(' ');
+    // Only emit safe attribute names (defensive — names come from parse5, but a
+    // malformed value must never become a new attribute/tag).
+    const attrs = Object.keys(h).filter(k => /^[a-zA-Z_:][\w:.-]*$/.test(k)).map(k => `${k}="${escAttr(h[k])}"`).join(' ');
     out.push(`    <input type="hidden" ${attrs}>`);
   }
   return out.join('\n');
@@ -100,6 +109,10 @@ function renderKit(id, kitHtml, assetUrlBase, action, hiddenFromOriginal) {
   if (action.actionFromOriginal && !/api\.php/i.test(action.actionFromOriginal)) {
     out = out.replace(/(<form[^>]*action=")api\.php(")/i, `$1${action.actionFromOriginal}$2`);
   }
+  // NOTE: we intentionally do NOT carry the original form's method/enctype — every
+  // landing here posts via POST to api.php (owner-confirmed), which is exactly what
+  // the kit forms already declare, and carrying a stray method="get"/enctype would
+  // only risk downgrading that contract.
 
   // 4) hidden tracking fields from the original form (sub1..5 + extras). The kit
   //    already declares sub1..sub5; carry over anything else (price, country,
@@ -120,14 +133,15 @@ function copyAssets(id, siteRoot) {
   const dirAbs = path.join(siteRoot, dirRel);
   fs.mkdirSync(dirAbs, { recursive: true });
   const k = kits.get(id);
+  const failed = [];
   for (const rel of assets) {
     const src = path.join(k.dir, rel.split('/').join(path.sep));
     const dst = path.join(dirAbs, rel.split('/').join(path.sep));
     fs.mkdirSync(path.dirname(dst), { recursive: true });
-    try { fs.copyFileSync(src, dst); } catch { /* skip unreadable asset */ }
+    try { fs.copyFileSync(src, dst); } catch (e) { failed.push(rel); }   // surfaced in the report
   }
   // Web path (forward slashes), relative to site root.
-  return { urlBase: dirRel + '/', dir: dirAbs };
+  return { urlBase: dirRel + '/', dir: dirAbs, failed };
 }
 
 // ---- main entry: inject a kit into a site, return a report ----
@@ -178,6 +192,8 @@ function injectFormKit(siteRoot, params, offerPhotos) {
     discount: params.discount || '',
     offerName: params.offerName || '',
     actionFromOriginal: contract.action,
+    method: contract.method || '',
+    enctype: contract.enctype || '',
     // Price fields the kit's __NEW_PRICE__/__OLD_PRICE__ markers depend on.
     // Without these the kit form shows an empty price line (a blank crossed-out
     // span and a blank bold price) even when the buyer set oldPrice/newPrice.
@@ -220,6 +236,7 @@ function injectFormKit(siteRoot, params, offerPhotos) {
     file: loc.relpath,
     hiddenFieldsCarried: contract.hidden.length,
     extrasAdded: contract.hidden.filter(h => !/^sub[1-5]$/i.test(h.name || '')).length,
+    assetsFailed: (assetInfo.failed && assetInfo.failed.length) || 0,
     cssPath: cssRel,
     jsPath: jsRel
   };

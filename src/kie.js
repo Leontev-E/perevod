@@ -60,30 +60,55 @@ function authHeaders(extra = {}) {
 // (kie outage / moderation storm on a nutra landing), stop hammering it for a
 // cooldown so translation batches fall through to the chat/GPT fallbacks fast
 // instead of each one burning 4 retries × 180s timeouts.
-const claudeBreaker = { fails: 0, until: 0 };
-function claudeOpen() { return Date.now() < claudeBreaker.until; }
-function claudeNoteFail() { if (++claudeBreaker.fails >= 4) claudeBreaker.until = Date.now() + 90000; }
-function claudeNoteOk() { claudeBreaker.fails = 0; claudeBreaker.until = 0; }
+// Keyed BY MODEL: Sonnet and Opus share this claude() entry + endpoint, but must
+// trip independently — an Opus (strong/artifact) tier hiccup must NOT stop the
+// Sonnet workhorse batches, and vice-versa.
+const claudeBreakers = new Map(); // model -> { fails, until }
+function claudeBreakerFor(model) { let b = claudeBreakers.get(model); if (!b) { b = { fails: 0, until: 0 }; claudeBreakers.set(model, b); } return b; }
+function claudeOpen(model) { return Date.now() < claudeBreakerFor(model).until; }
+function claudeNoteFail(model) { const b = claudeBreakerFor(model); if (++b.fails >= 4) b.until = Date.now() + 90000; }
+function claudeNoteOk(model) { const b = claudeBreakerFor(model); b.fails = 0; b.until = 0; }
 
-async function claude({ system, messages, maxTokens = 8000, temperature, model }) {
-  // When the breaker is open, fail fast — callers already have a multi-tier
-  // fallback (chat models / GPT 5.5). Throwing here short-circuits cleanly.
-  if (claudeOpen()) {
-    const e = new Error('claude circuit open'); e.breaker = true; throw e;
+async function claude({ system, messages, maxTokens = 8000, temperature, model, thinkingFlag, timeoutMs, tools, tool_choice }) {
+  const mdl = model || cfg.kie.claudeModel;
+  // When THIS model's breaker is open, fail fast — callers already have a
+  // multi-tier fallback (chat models / GPT 5.5). Throwing short-circuits cleanly.
+  if (claudeOpen(mdl)) {
+    const e = new Error('claude circuit open: ' + mdl); e.breaker = true; throw e;
   }
-  const body = { model: model || cfg.kie.claudeModel, max_tokens: maxTokens, messages };
+  const body = { model: mdl, max_tokens: maxTokens, messages };
   if (system) body.system = system;
   if (typeof temperature === 'number') body.temperature = temperature;
+  if (thinkingFlag) body.thinkingFlag = true;                       // Opus 4.8 extended reasoning
+  if (Array.isArray(tools) && tools.length) { body.tools = tools; if (tool_choice) body.tool_choice = tool_choice; }
   try {
     const json = await fetchJson(cfg.kie.claudeUrl, {
       method: 'POST', headers: authHeaders(), body: JSON.stringify(body)
-    }, { retries: 4, timeoutMs: 180000 });
+    }, { retries: 4, timeoutMs: timeoutMs || 180000 });
     const parts = Array.isArray(json.content) ? json.content : [];
     const txt = parts.filter(p => p && (p.type === 'text' || typeof p.text === 'string'))
                      .map(p => p.text || '').join('');
-    claudeNoteOk();
-    return { text: txt, raw: json, credits: json.credits_consumed };
-  } catch (e) { claudeNoteFail(); throw e; }
+    // Structured-output path: a tool_use block carries clean typed JSON in .input.
+    const toolUse = parts.find(p => p && p.type === 'tool_use' && p.input && typeof p.input === 'object');
+    claudeNoteOk(mdl);
+    // stopReason exposed so callers can tell a TRUNCATED reply (max_tokens) from a
+    // refusal/short reply and not treat a partial batch as a full decline.
+    return { text: txt, raw: json, credits: json.credits_consumed, stopReason: json.stop_reason, toolInput: toolUse ? toolUse.input : null };
+  } catch (e) { claudeNoteFail(mdl); throw e; }
+}
+
+// Structured-output helper: force the model to emit its result via ONE tool call
+// (input_schema), returning clean typed JSON with no prose/code-fence/prefill
+// hacks. Returns { obj, via }. Never throws for a "no tool" reply — it falls back
+// to text-JSON extraction; the CALLER should try/catch the network error and
+// keep its own non-tool fallback (in case the provider rejects tool_choice).
+async function claudeToolJson({ system, messages, toolName = 'emit', description = 'Return the structured result as tool input.', schema, model, maxTokens = 8000, temperature = 0.2, thinkingFlag, timeoutMs }) {
+  const tools = [{ name: toolName, description, input_schema: schema }];
+  const tool_choice = { type: 'tool', name: toolName };
+  const r = await claude({ system, messages, model, maxTokens, temperature, thinkingFlag, timeoutMs, tools, tool_choice });
+  if (r.toolInput && typeof r.toolInput === 'object') return { obj: r.toolInput, via: 'tool', raw: r.raw, stopReason: r.stopReason };
+  const obj = extractJson(r.text);
+  return { obj: (obj && typeof obj === 'object') ? obj : null, via: obj ? 'text' : 'none', raw: r.raw, stopReason: r.stopReason };
 }
 
 // A Claude helper that expects and repairs strict JSON output.
@@ -342,7 +367,7 @@ function extractJson(text) {
 }
 
 module.exports = {
-  claude, claudeJson, gpt, gptJson, orchestrateJson, chatCompletion,
+  claude, claudeJson, claudeToolJson, gpt, gptJson, orchestrateJson, chatCompletion,
   uploadBase64, createImageTask, pollImageTask, grokEditImage, editImageFallback, downloadBuffer,
   extractJson, fetchJson
 };

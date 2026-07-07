@@ -34,7 +34,8 @@ free
   : `PRICING: current price "${params.newPrice}" ${params.currency}; old/crossed-out "${params.oldPrice}" ${params.currency}; discount "${params.discount}". Apply wherever a price/discount appears. IMPORTANT: if the source presents the product as free / gratis / "100%" / "0" cost, you MUST convert that to this PAID promo — write "${params.newPrice} ${params.currency}" and "${params.discount}" off; never keep "free"/"gratis"/"100%"/"0" for the product price.`,
 `GEO: country shown to users = ${lr.countryNativeName || params.country}; phone numbers/prefixes = ${lr.phonePrefix || 'local code of ' + params.country}${lr.phoneExample ? ' (e.g. ' + lr.phoneExample + ')' : ''}. Replace any source city with real cities of ${params.country}${lr.cityExamples ? ' (e.g. ' + JSON.stringify(lr.cityExamples) + ')' : ''}. Adapt ALL personal names in reviews/testimonials to names common in ${params.country}${lr.nameExamples ? ' (e.g. ' + JSON.stringify(lr.nameExamples) + ')' : ''}.`,
 `LANGUAGE: output must be 100% in ${langDirective(params)}. Never leave text in the source language or any third language.`,
-b.glossary ? `NAME GLOSSARY (MANDATORY — apply exactly): the glossary maps source person mentions to ONE canonical localized name each. Several source keys can be the SAME person (different forms/inflections like "Jan Kowalski", "Kowalski", "dr Kowalski", "panem Janem"). Whenever a source fragment contains ANY glossary key (whole or as part of a name phrase), render that person using the EXACT target name for that key, and use that SAME target name in EVERY fragment — never invent a different localized name, never translate only part of it. This ensures one person = one name across the whole page. Glossary ${JSON.stringify(b.glossary).slice(0, 1000)}` : '',
+`CONSISTENCY: when a fragment contains a person name or a recurring term given in the message's "Person names"/"Terms" hints, use EXACTLY that target — identically in every fragment. One person = one localized name across the whole page; one recurring phrase = one target wording.`,
+b.tone ? `VOICE: keep this register consistent — ${b.tone}` : '',
 b.notes ? `NOTE: ${b.notes}` : '',
 ``,
 `PRESERVE EXACTLY (copy verbatim, never translate): tokens like KIEPHP<digits>ENDK, {var}, {{x}}, %s, %1$s, :param, \${...}, HTML tags and entities (&nbsp; &amp; …), URLs, emails, file names, CSS/JS identifiers/classes.`,
@@ -49,6 +50,39 @@ const MINIMAL_SYSTEM =
 `You are a JSON translation function. Input: a JSON array of {id, text}. Output: a JSON object {id: translated_text}. ` +
 `Translate each text into the requested target language, preserving tokens like KIEPHP<n>ENDK, {vars}, %s, HTML tags and URLs verbatim. ` +
 `Return ONLY the JSON object with every id, starting with "{". No commentary, ever.`;
+
+// Tool-call output schema: a map id -> translated text (clean structured output,
+// no prose/code-fence/prefill hacks; the model can't wrap it in a refusal).
+const TRANSLATIONS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['translations'],
+  properties: { translations: { type: 'object', additionalProperties: { type: 'string' }, description: 'Every input id mapped to its translated string.' } }
+};
+
+// Build a COMPACT per-batch consistency hint: only the glossary persons and the
+// terminology entries whose source actually appears in THIS batch. This pins
+// names/terms for EVERY tier that translates the batch (minimal/single/gpt/chat
+// paths were previously blind to the glossary), while keeping the prompt small.
+function relevantHintsLine(batch, brief) {
+  const b = brief || {};
+  const blob = batch.map(u => String(u.text || '')).join('\n').toLowerCase();
+  const parts = [];
+  const gl = (b.glossary && typeof b.glossary === 'object') ? b.glossary : {};
+  const names = [];
+  for (const src of Object.keys(gl)) {
+    const tgt = gl[src];
+    if (src && tgt && blob.includes(String(src).toLowerCase())) names.push(`"${src}"→"${tgt}"`);
+    if (names.length >= 15) break;
+  }
+  if (names.length) parts.push(`Person names — render EXACTLY, identically everywhere: ${names.join(', ')}.`);
+  const terms = [];
+  for (const t of (Array.isArray(b.terminology) ? b.terminology : [])) {
+    if (t && t.src && t.target && blob.includes(String(t.src).toLowerCase())) terms.push(`"${t.src}"→"${t.target}"`);
+    if (terms.length >= 15) break;
+  }
+  if (terms.length) parts.push(`Recurring terms — use this exact target: ${terms.join(', ')}.`);
+  if (b.tone) parts.push(`Voice: ${b.tone}`);
+  return parts.length ? '\nCONSISTENCY PINS:\n' + parts.join('\n') + '\n' : '';
+}
 
 function parseObj(text) {
   if (!text) return null;
@@ -72,18 +106,27 @@ async function callClaude(batch, params, brief, minimal) {
   const payload = minimal
     ? batch.map(u => ({ id: u.gid, text: u.text }))
     : batch.map(u => ({ id: u.gid, ctx: u.ctx, kind: u.kind, text: u.text }));
+  const hints = relevantHintsLine(batch, brief);
   const header = minimal
-    ? `Target language: ${langDirective(params)} (${params.country}). Product name: ${params.offerName}. Price now ${params.newPrice} ${params.currency}, was ${params.oldPrice} ${params.currency}.\nTranslate each text. Return ONLY JSON {id:translation}.\n`
-    : `Translate/localize these fragments. Return JSON { "<id>": "<text>" } for all ${batch.length} ids.\n\n`;
-  const messages = [
-    { role: 'user', content: header + JSON.stringify(payload) },
-    { role: 'assistant', content: '{' }         // prefill -> forces JSON, drops refusal preamble
-  ];
-  const { text } = await kie.claude({
-    system: minimal ? MINIMAL_SYSTEM : systemPrompt(params, brief),
-    messages, maxTokens: 8000, temperature: minimal ? 0.2 : 0.3
-  });
-  return collect(parseObj(text), batch);
+    ? `Target language: ${langDirective(params)} (${params.country}). Product name: ${params.offerName}. Price now ${params.newPrice} ${params.currency}, was ${params.oldPrice} ${params.currency}.${hints}\nTranslate each text. Call the translations tool with an entry for EVERY id.\n`
+    : `Translate/localize these fragments. Call the translations tool with a target for all ${batch.length} ids.${hints}\n\n`;
+  const messages = [{ role: 'user', content: header + JSON.stringify(payload) }];
+  // Structured output via a forced tool call (clean id->text map, no prefill/
+  // refusal-preamble hacks). Any error/decline -> empty map -> the caller's
+  // multi-tier fallback chain (DeepSeek/GPT/split-to-single) fills the rest.
+  let map = null;
+  try {
+    const r = await kie.claudeToolJson({
+      system: minimal ? MINIMAL_SYSTEM : systemPrompt(params, brief),
+      messages, toolName: 'translations', description: 'Emit the id-to-translation map.',
+      schema: TRANSLATIONS_SCHEMA, maxTokens: 8000,
+      temperature: cfg.textTemperature,
+      model: (params && params.qualityModel) || undefined     // Opus 4.8 in quality mode, else Sonnet 5
+    });
+    if (r.obj && r.obj.translations && typeof r.obj.translations === 'object') map = r.obj.translations;
+    else if (r.obj && typeof r.obj === 'object') map = r.obj;  // provider returned the bare map
+  } catch { map = null; }
+  return collect(map, batch);
 }
 
 // GPT 5.5 fallback translator — used when Claude declines/returns short.
@@ -96,12 +139,14 @@ async function callGpt(batch, params, brief) {
   const b = brief || {}; const lr = b.localeRules || {};
   const payload = batch.map(u => ({ id: u.gid, text: u.text }));
   const free = b.pricingMode === 'free';
+  const hints = relevantHintsLine(batch, brief);
   const input =
 `Translate every "text" into natural ${langDirective(params)} as spoken in ${params.country}.\n` +
 `Product name: replace old name(s) ${JSON.stringify(b.sourceOfferNames || [])} with "${params.offerName}" everywhere; never keep or literally translate the old name.\n` +
 (free ? `Pricing: FREE giveaway (price ${params.newPrice}); use free wording, no "discount".\n`
       : `Pricing: now ${params.newPrice} ${params.currency}, was ${params.oldPrice} ${params.currency}, ${params.discount} off.\n`) +
 `GEO: country=${lr.countryNativeName || params.country}, phone prefix=${lr.phonePrefix || 'local'}; localize cities and personal names to ${params.country}. Output 100% in ${langDirective(params)}.\n` +
+(hints ? hints + '\n' : '') +
 `Preserve KIEPHP<n>ENDK tokens, {vars}, %s, HTML tags/entities and URLs verbatim.\n` +
 `Return ONLY a JSON object { "<id>": "<translation>" } covering all ${payload.length} ids.\n\n` + JSON.stringify(payload);
   const { obj } = await kie.gptJson({ instructions: GPT_TRANSLATOR, input, effort: 'low' });
@@ -118,9 +163,11 @@ async function callChatModel(model, batch, params, brief) {
   const b = brief || {}; const lr = b.localeRules || {};
   const payload = batch.map(u => ({ id: u.gid, text: u.text }));
   const sys = GPT_TRANSLATOR;
+  const hints = relevantHintsLine(batch, brief);
   const user =
 `Translate every "text" into natural ${langDirective(params)} for ${params.country}. Render the product as "${params.offerName}"${(b.sourceOfferNames && b.sourceOfferNames.length) ? ` (replacing old name(s) ${JSON.stringify(b.sourceOfferNames)})` : ''}. ` +
 `${b.pricingMode === 'free' ? 'The product is offered at no cost.' : `Price ${params.newPrice} ${params.currency}.`} Country=${lr.countryNativeName || params.country}, phone=${lr.phonePrefix || 'local'}; localize cities/names. Output 100% ${langDirective(params)}. Preserve KIEPHP<n>ENDK, {vars}, HTML, URLs.\n` +
+(hints ? hints : '') +
 `Return ONLY JSON {"<id>":"<translation>"} for all ${payload.length} ids.\n` + JSON.stringify(payload);
   const text = await kie.chatCompletion(model, [{ role: 'system', content: sys }, { role: 'user', content: user }], { maxTokens: 8000 });
   return collect(parseObj(text) || kie.extractJson(text), batch);
@@ -154,10 +201,11 @@ function singleSysRepair(params, brief) {
 async function callClaudeSingle(unit, params, brief) {
   const strong = cfg.kie.claudeStrongModel;
   const models = strong ? [null, strong] : [null];   // Sonnet 5 first, then Opus tier
+  const hint = relevantHintsLine([unit], brief);      // pin name/term for THIS fragment too
   for (const model of models) {
     for (const mk of [singleSysNeutral, singleSysRepair]) {
       try {
-        const { text } = await kie.claude({ system: mk(params, brief), messages: [{ role: 'user', content: unit.text }], maxTokens: 2000, temperature: 0.2, model });
+        const { text } = await kie.claude({ system: mk(params, brief) + hint, messages: [{ role: 'user', content: unit.text }], maxTokens: 2000, temperature: cfg.textTemperature, model });
         const t = (text || '').trim();
         if (t && !isRefusal(t)) return t;
       } catch { /* try next framing / model */ }
@@ -214,30 +262,57 @@ async function translateChunk(batch, params, brief, depth) {
 
 function makeBatches(units, maxChars, maxUnits) {
   const batches = [];
-  let cur = [], curChars = 0;
+  let cur = [], curChars = 0, curSec;
   for (const u of units) {
     const len = (u.text || '').length + 40;
-    if (cur.length && (curChars + len > maxChars || cur.length >= maxUnits)) { batches.push(cur); cur = []; curChars = 0; }
+    // Hard limit: never exceed the char/unit cap (keeps a batch's OUTPUT under
+    // the model's token ceiling — critical, do not weaken).
+    const hardBreak = cur.length && (curChars + len > maxChars || cur.length >= maxUnits);
+    // Soft limit: once the batch is reasonably full, prefer to break at a section
+    // boundary so a heading and its body (same `sec`) translate together. When
+    // `sec` is absent (non-HTML units) this is inert — identical to before.
+    const softBreak = cur.length && u.sec != null && curSec != null && u.sec !== curSec && curChars >= maxChars * 0.4;
+    if (hardBreak || softBreak) { batches.push(cur); cur = []; curChars = 0; curSec = undefined; }
     cur.push(u); curChars += len;
+    if (curSec == null) curSec = u.sec;
   }
   if (cur.length) batches.push(cur);
   return batches;
 }
 
-// units: [{gid, text, ctx, kind}] -> { translations: {gid:text}, missing:[gid], batches }
+// units: [{gid, text, ctx, kind, sec}] -> { translations: {gid:text}, missing:[gid], batches }
 async function translateUnits(units, params, brief, onProgress) {
-  const batches = makeBatches(units, cfg.textBatchChars, MAX_UNITS_PER_BATCH);
+  // Translation memory: translate each UNIQUE source string ONCE (keyed on the
+  // EXACT text — reinsertion is byte-faithful, so leading/trailing whitespace is
+  // significant), then fan the result out to every unit that shares it. This
+  // guarantees "one source → one translation" for repeated CTAs/labels/section
+  // titles and cuts cost/latency on repetitive landings.
+  const byText = new Map(); // exact text -> { rep: unit, gids: [gid] }
+  for (const u of units) {
+    let e = byText.get(u.text);
+    if (!e) { e = { rep: u, gids: [] }; byText.set(u.text, e); }
+    e.gids.push(u.gid);
+  }
+  const repUnits = [...byText.values()].map(e => e.rep);
+  const batches = makeBatches(repUnits, cfg.textBatchChars, MAX_UNITS_PER_BATCH);
   const limit = pLimit(cfg.claudeConcurrency);
-  const translations = {};
+  const repTx = {}; // rep.gid -> translation
   let done = 0;
   await Promise.all(batches.map((batch) => limit(async () => {
     let res = {};
     try { res = await translateChunk(batch, params, brief, 0); }
     catch (e) { if (onProgress) onProgress({ type: 'warn', msg: `батч ошибка: ${e.message}` }); }
-    Object.assign(translations, res);
+    Object.assign(repTx, res);
     done++;
     if (onProgress) onProgress({ type: 'progress', msg: `перевод текста: батч ${done}/${batches.length}` });
   })));
+  // Fan out: every unit sharing a source string gets the SAME translation.
+  const translations = {};
+  for (const e of byText.values()) {
+    const t = repTx[e.rep.gid];
+    if (t != null) for (const gid of e.gids) translations[gid] = t;
+  }
+  if (onProgress && repUnits.length < units.length) onProgress({ type: 'progress', msg: `TM: уникальных строк ${repUnits.length} из ${units.length}` });
   const missing = units.filter(u => translations[u.gid] == null).map(u => u.gid);
   return { translations, missing, batches: batches.length };
 }
@@ -248,4 +323,4 @@ async function retranslateFlagged(units, params, brief, reason) {
   return translations;
 }
 
-module.exports = { translateUnits, retranslateFlagged, systemPrompt };
+module.exports = { translateUnits, retranslateFlagged, systemPrompt, makeBatches, relevantHintsLine };

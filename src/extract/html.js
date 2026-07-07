@@ -42,15 +42,21 @@ function extractHtml(source) {
   const attrRefs = new Map();  // id -> {attr}
   const scripts = [];          // {node, textNode, extractor, idMap}
   let n = 0;
+  // Coarse section index: bumped on entering a semantic sectioning element, so
+  // units in the same section share a `sec`. Used only to keep related fragments
+  // (a heading + its body) in the same translation batch — never affects the
+  // extracted text or reinsertion.
+  let secCounter = 0;
+  const SECTION_TAGS = new Set(['section', 'article', 'main', 'header', 'footer', 'aside']);
 
-  function walk(node, parentTag) {
+  function walk(node, parentTag, sec) {
     const name = node.tagName || node.nodeName;
 
     if (name === '#text') {
       if (!SKIP_TEXT_PARENTS.has(parentTag) && isTranslatableText(node.value)) {
         const id = 't' + (n++);
         textNodes.set(id, node);
-        units.push({ id, kind: 'text', text: node.value, ctx: parentTag || '' });
+        units.push({ id, kind: 'text', text: node.value, ctx: parentTag || '', sec });
       }
       return;
     }
@@ -64,22 +70,24 @@ function extractHtml(source) {
         // still descend for scripts? no — skip entire subtree for text
         return;
       }
-      collectAttrs(node);
+      collectAttrs(node, sec);
     }
 
     if (name === 'script') {
-      handleScript(node);
+      handleScript(node, sec);
       return; // don't descend into script text as text
     }
     if (name === 'style') return;
 
+    // A new semantic section gets its own index; everything else inherits.
+    const childSec = SECTION_TAGS.has(name) ? ++secCounter : sec;
     const kids = node.childNodes || node.content && node.content.childNodes || [];
     // <template> content lives under node.content
     const childList = node.content ? node.content.childNodes : kids;
-    for (const c of childList) walk(c, name);
+    for (const c of childList) walk(c, name, childSec);
   }
 
-  function collectAttrs(node) {
+  function collectAttrs(node, sec) {
     const tag = node.tagName;
     for (const attr of node.attrs) {
       const an = attr.name;
@@ -94,12 +102,12 @@ function extractHtml(source) {
       if (take && isTranslatableText(attr.value)) {
         const id = 'a' + (n++);
         attrRefs.set(id, attr);
-        units.push({ id, kind: 'attr', text: attr.value, ctx: `${tag}[${an}]` });
+        units.push({ id, kind: 'attr', text: attr.value, ctx: `${tag}[${an}]`, sec });
       }
     }
   }
 
-  function handleScript(node) {
+  function handleScript(node, sec) {
     const type = (getAttr(node, 'type') || '').toLowerCase();
     const isJs = !type || /javascript|module|ecmascript|^text\/js$/.test(type);
     if (!isJs) return; // JSON-LD, templates, etc. — leave alone
@@ -112,12 +120,12 @@ function extractHtml(source) {
     for (const u of ex.units) {
       const gid = 'js_' + (n++);
       idMap.set(gid, u.localId);
-      units.push({ id: gid, kind: 'js', text: u.text, ctx: 'inline-script' });
+      units.push({ id: gid, kind: 'js', text: u.text, ctx: 'inline-script', sec });
     }
     scripts.push({ textNode, extractor: ex, idMap });
   }
 
-  walk(doc, null);
+  walk(doc, null, 0);
 
   function applyAndSerialize(translationMap) {
     const failures = [];
