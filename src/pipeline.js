@@ -11,7 +11,7 @@ const { compareStructure } = require('./verify/structure');
 const { renderCheck, compareRenders } = require('./verify/render');
 const geoforms = require('./geoforms');
 const kie = require('./kie');
-const { applyDiscount } = require('./discount');
+const { applyDiscount, normalizePromoFree } = require('./discount');
 const { adaptJsPromo } = require('./agents/jsPromo');
 const textAgent = require('./agents/textAgent');
 const controller = require('./agents/controller');
@@ -381,11 +381,25 @@ async function applyAndVerifyFile(id, pf, translations, params, brief, backupDir
     const d = applyDiscount(applied.content, params.discount);
     if (d.hits) { applied.content = d.content; log(id, 'progress', `Скидка → ${params.discount}% в ${pf.relpath} (${d.hits} мест)`); }
   }
+  // AI JS-promo: standalone .js files AND inline <script> blocks inside html/php
+  // (a pick-a-door / wheel game's discount+prize logic usually lives in an inline
+  // script — running it only on .js files missed it entirely).
   if (pf.type === 'js') {
     try {
       const r = await adaptJsPromo(applied.content, params, brief);
       if (r.edits) { applied.content = r.code; rec.promoEdits = r.edits; log(id, 'progress', `Обновили промо в скрипте ${pf.relpath} (${r.edits} правок)`); }
     } catch (e) { log(id, 'warn', `JS-промо ${pf.relpath}: ${e.message}`); }
+  } else if (pf.type === 'html' || pf.type === 'php') {
+    try {
+      const r = await adaptInlineScriptsPromo(applied.content, params, brief);
+      if (r.edits) { applied.content = r.content; rec.promoEdits = (rec.promoEdits || 0) + r.edits; log(id, 'progress', `Обновили промо в inline-скриптах ${pf.relpath} (${r.edits} правок)`); }
+    } catch (e) { log(id, 'warn', `Inline-промо ${pf.relpath}: ${e.message}`); }
+  }
+  // FREE-offer normalization: rewrite any leftover "N% discount" (door/wheel prize,
+  // fake win-popup, badge) to 100% so it can never contradict a free giveaway.
+  {
+    const np = normalizePromoFree(applied.content, params);
+    if (np.hits) { applied.content = np.content; log(id, 'progress', `Free-режим: промо-скидки → 100% в ${pf.relpath} (${np.hits})`); }
   }
 
   // geo-adapt the lead form (country <select> default, phone prefix, hidden
@@ -538,13 +552,32 @@ async function processImages(id, imageFiles, siteRoot, backupDir, params, brief,
     // the real photo stays alive — never flat-replace. Badges/decor/logos/person-
     // only (no words, no brand) are left untouched.
     if (!(hasWords || analysis.brandOnImage)) { left++; rec.kind = 'left'; report.images.push(rec); return; }
+
+    // DESIGN BANNERS (header/footer/hero/banner/cover): AI regeneration flattens
+    // their gradients/3D/design, so PRESERVE the original rather than "translate"
+    // it. Product shots and review photos are handled by replace/composite above.
+    if (isDesignBanner(relPosix, dims) && analysis.category !== 'product_hero' && !isReviewImg) {
+      left++; rec.kind = 'left-design-banner';
+      log(id, 'image', `↩ ${primary.relpath}: дизайн-баннер (шапка/подвал) — сохранён как есть, чтобы не уплостить дизайн`);
+      report.images.push(rec);
+      return;
+    }
     if ((edited + replaced) >= cfg.maxImages) { skipped++; report.images.push(rec); return; }
 
     try {
-      const what = analysis.category === 'lifestyle' ? 'живое фото: смена бренда' : (analysis.brandOnImage ? 'текст+бренд' : 'перевод текста');
+      const willComposite = !!offerRefUrl && (analysis.category === 'lifestyle' || isReviewImg);
+      const what = willComposite ? 'живое/отзыв: подставляем новый оффер в сцену' : (analysis.brandOnImage ? 'текст+бренд' : 'перевод текста');
       log(id, 'image', `Картинка ${primary.relpath} (${analysis.category}): ${what}…`);
-      const res = await imageAgent.editImage(buf, path.basename(primary.relpath), mime, analysis, params, brief, { offerRefUrl });
+      const res = await imageAgent.editImage(buf, path.basename(primary.relpath), mime, analysis, params, brief, { offerRefUrl, isReviewImg });
       report.credits += res.credits || 0;
+      if (res.unchanged) {
+        // Composite could not be produced — the review/lifestyle photo was LEFT as
+        // is (NEVER relabeled to the old product with the new name — that was the bug).
+        left++; rec.kind = 'left-composite-failed'; rec.reason = res.via;
+        log(id, 'image', `↩ ${primary.relpath}: композит нового оффера не удался — фото оставлено как есть (без релейбла старого продукта)`);
+        report.images.push(rec);
+        return;
+      }
       await writeGroup(grp, primary, res.buffer, res.dims);
       rec.changed = true; rec.kind = 'edited'; rec.via = res.via;
       rec.preview = `/preview/${id}/${primary.relpath}`;
@@ -575,6 +608,42 @@ function buildReferenceBlob(all) {
 function isReferenced(relpath, blob) {
   const base = path.basename(relpath);
   return blob.includes(base) || blob.includes(relpath.replace(/\\/g, '/'));
+}
+
+// A header/footer/hero/banner/cover graphic where AI regeneration would flatten
+// the design (gradients/3D/shadows). Detected by filename + a banner-ish shape or
+// a large canvas — a small square "header icon" is still fine to edit.
+function isDesignBanner(relpath, dims) {
+  const base = String(relpath || '').toLowerCase();
+  if (!/(header|footer|banner|hero|cover|background|bg[\d_.-])/i.test(base)) return false;
+  const w = (dims && dims.width) || 0, h = (dims && dims.height) || 0;
+  const wide = w && h && (w / h) > 2.2;   // wide top/bottom banner
+  const tall = w && h && (h / w) > 2.2;   // tall side banner
+  const big = w >= 900 || h >= 700;       // large design canvas
+  return wide || tall || big;
+}
+
+// Run the AI JS-promo adapter over each inline <script> block of an HTML/PHP file
+// (a pick-a-door / wheel widget hard-codes its discount + prize values in an inline
+// script, which the .js-only pass never saw). JSON-LD/template/src scripts skipped.
+async function adaptInlineScriptsPromo(content, params, brief) {
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m, edits = 0, out = '', last = 0;
+  while ((m = re.exec(content)) !== null) {
+    const full = m[0], attrs = m[1], code = m[2];
+    out += content.slice(last, m.index);
+    last = m.index + full.length;
+    const type = (attrs.match(/type\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || '';
+    const isJs = !type || /javascript|module|ecmascript|text\/js/i.test(type);
+    if (!isJs || !code.trim() || /\bsrc\s*=/i.test(attrs)) { out += full; continue; }
+    try {
+      const r = await adaptJsPromo(code, params, brief);
+      if (r.edits && r.code) { out += `<script${attrs}>${r.code}</script>`; edits += r.edits; continue; }
+    } catch { /* leave this script unchanged */ }
+    out += full;
+  }
+  out += content.slice(last);
+  return { content: out, edits };
 }
 
 function computePricingMode(params) {
@@ -778,4 +847,4 @@ function collectReviewImages(allFiles, siteRoot) {
   return out;
 }
 
-module.exports = { runJob, enforceConsistency, verifyConsistency };
+module.exports = { runJob, enforceConsistency, verifyConsistency, isDesignBanner, adaptInlineScriptsPromo };

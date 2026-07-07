@@ -85,6 +85,13 @@ function discountNum(d) {
   return m ? m[0] : '';
 }
 
+// Prefix every kit-root-class selector with a unique id so the kit's CSS wins over
+// ANY host-page class rule (id specificity > any number of classes). @keyframes /
+// @media are untouched — they don't contain the root-class token.
+function armorKitCss(css, rootClass, scopeId) {
+  return String(css).split('.' + rootClass).join('#' + scopeId + '.' + rootClass);
+}
+
 // Fill the kit markup: asset paths + buyer params + transferred hidden fields.
 function renderKit(id, kitHtml, assetUrlBase, action, hiddenFromOriginal) {
   let out = kitHtml;
@@ -203,6 +210,15 @@ function injectFormKit(siteRoot, params, offerPhotos) {
   };
   let rendered = renderKit(id, kitHtml, assetInfo.urlBase, action, contract.hidden);
 
+  // Bulletproof the kit's styling against the HOST page's own CSS: give the kit
+  // root a unique id and scope the kit CSS under it (below). An id-level selector
+  // always beats any class-based host rule, so a landing's own form/input/button
+  // styles can never break the injected kit's form (a real bug seen on 311).
+  const rootClass = String(kit.root || ('.' + id + '-kit')).replace(/^\./, '');
+  const scopeId = 'fk-' + id;
+  rendered = rendered.replace(new RegExp('(<[a-zA-Z][a-zA-Z0-9]*)((?:\\s[^>]*?)?\\sclass="[^"]*\\b' + rootClass + '\\b[^"]*")'),
+    (m, tagStart, rest) => /\sid=/.test(rest) ? m : `${tagStart} id="${scopeId}"${rest}`);
+
   // If there is no product image for this kit, drop the product <img> entirely
   // (a broken img icon is worse than no image). We target the kit's product img
   // by the __FORMKIT_ASSET__product.png src that the kits declare.
@@ -223,7 +239,7 @@ function injectFormKit(siteRoot, params, offerPhotos) {
   // them. We write them next to the other kit assets.
   const cssRel = path.posix.join(ASSET_DIR_NAME, ASSET_PREFIX + '-' + id, 'kit.css');
   const jsRel = path.posix.join(ASSET_DIR_NAME, ASSET_PREFIX + '-' + id, 'kit.js');
-  fs.writeFileSync(path.join(siteRoot, cssRel), kits.readCss(id));
+  fs.writeFileSync(path.join(siteRoot, cssRel), armorKitCss(kits.readCss(id), rootClass, scopeId));
   fs.writeFileSync(path.join(siteRoot, jsRel), kits.readJs(id));
 
   // Inject the <link> into <head> and the <script defer> before </body> of the
@@ -273,4 +289,4 @@ function injectAssetTags(filePath, cssRel, jsRel) {
   if (changed) fs.writeFileSync(filePath, src);
 }
 
-module.exports = { injectFormKit, extractContract, renderKit };
+module.exports = { injectFormKit, extractContract, renderKit, armorKitCss };

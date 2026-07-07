@@ -269,17 +269,20 @@ async function grokEditImage({ prompt, inputUrl }) {
 // Generic less-censored image editor for the fallback chain (Grok / Flux-2 /
 // Nano-Banana). Each family wants a slightly different input shape; we route by
 // model prefix. Uses the same jobs/createTask + recordInfo polling flow.
-async function editImageFallback(model, { prompt, inputUrl, aspectRatio = 'auto' }) {
+async function editImageFallback(model, { prompt, inputUrl, inputUrls, aspectRatio = 'auto' }) {
+  // Accept MULTIPLE input urls so the fallback can also COMPOSITE (scene + new
+  // offer reference), not only single-image relabel. Back-compat: inputUrl alone.
+  const urls = (Array.isArray(inputUrls) && inputUrls.length) ? inputUrls : [inputUrl];
   let input;
   if (/^grok/i.test(model)) {
-    input = { prompt, image_urls: [inputUrl], nsfw_checker: false };
+    input = { prompt, image_urls: urls, nsfw_checker: false };
   } else if (/nano-banana/i.test(model)) {
-    input = { prompt, input_urls: [inputUrl], output_format: 'png', nsfw_checker: false };
+    input = { prompt, input_urls: urls, output_format: 'png', nsfw_checker: false };
   } else {
     // flux-2/pro-image-to-image and other input_urls-style editors. Use "auto"
     // aspect_ratio: each editor allows a different ratio set, and the result is
     // refit to the original pixel dims anyway, so "auto" is the safe universal choice.
-    input = { prompt, input_urls: [inputUrl], aspect_ratio: 'auto', resolution: '1K', nsfw_checker: false };
+    input = { prompt, input_urls: urls, aspect_ratio: 'auto', resolution: '1K', nsfw_checker: false };
   }
   const json = await fetchJson(cfg.kie.createTaskUrl, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ model, input })

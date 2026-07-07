@@ -62,15 +62,18 @@ async function editImage(buffer, fileName, mime, analysis, params, brief, opts =
   const uploadName = 'src_' + Math.abs(hashCode(fileName)) + extFromMime(mime);
   const url = await kie.uploadBase64(buffer, uploadName, mime, 'perevod-src');
 
-  // COMPOSITE mode: a real offer photo was uploaded and this is a living/review
-  // photo showing the product package → put the NEW offer's package into the
-  // scene (not just relabel the old one), keeping the person/scene alive.
-  const composite = opts.offerRefUrl && analysis.category === 'lifestyle';
+  // COMPOSITE mode: an offer photo was uploaded and this image shows the product
+  // in a real/review scene → put the NEW offer's package INTO the scene (keep the
+  // person/scene), instead of relabeling the OLD product. Triggers for lifestyle
+  // photos AND review/testimonial images — vision often labels a review shot
+  // "product_hero" because the product is prominent, so the pipeline passes an
+  // explicit isReviewImg flag.
+  const composite = !!opts.offerRefUrl && (analysis.category === 'lifestyle' || !!opts.isReviewImg);
   let instruction, inputUrls;
   if (composite) {
     instruction =
-`The FIRST image is a real photo of a person with a product. Replace the product/package shown in the first image with the product from the SECOND image — match the second image's packaging shape, colour, label and brand name "${params.offerName}". ` +
-`Keep the person, hands, pose, facial expression, background, lighting, framing and composition of the FIRST image EXACTLY as they are — change only the product package. ` +
+`The FIRST image is a real photo showing a product. Replace the product/package shown in the FIRST image with the product from the SECOND image — match the SECOND image's packaging shape, colour, label and brand name "${params.offerName}". ` +
+`Keep the person, hands, pose, facial expression, background, lighting, framing and composition of the FIRST image EXACTLY as they are — change ONLY the product package. ` +
 `Any other visible text must be in ${langDirective(params)}. Keep it photorealistic; do not change the image dimensions.`;
     inputUrls = [url, opts.offerRefUrl];
   } else {
@@ -95,18 +98,26 @@ keepScene +
     resultUrl = r.urls[0]; credits = r.credits || 0;
     resultBuf = await kie.downloadBuffer(resultUrl);
   } catch (e1) {
-    // Less-censored fallback chain (Grok → Flux-2 …). Single input image, so
-    // these relabel the scene rather than compositing. First one that works wins.
-    const fbPrompt = instruction.replace(/SECOND image/g, 'reference');
+    // Less-censored fallback chain (Grok → Flux-2 …). For COMPOSITE we pass BOTH
+    // images so the fallback can ALSO swap the product to the new offer instead of
+    // relabeling the old one.
+    const fbPrompt = instruction.replace(/SECOND image/g, 'second reference image');
+    const fbInputs = composite ? [url, opts.offerRefUrl] : [url];
     let lastErr = e1, done = false;
     for (const model of cfg.kie.imageFallbacks) {
       try {
-        const g = await kie.editImageFallback(model, { prompt: fbPrompt, inputUrl: url, aspectRatio: aspect });
-        resultUrl = g.url; credits = g.credits || 0; via = g.via;
+        const g = await kie.editImageFallback(model, { prompt: fbPrompt, inputUrls: fbInputs, aspectRatio: aspect });
+        resultUrl = g.url; credits = g.credits || 0; via = composite ? g.via + '(composite)' : g.via;
         resultBuf = await kie.downloadBuffer(resultUrl); done = true; break;
       } catch (e2) { lastErr = e2; }
     }
-    if (!done) throw lastErr;
+    if (!done) {
+      // A COMPOSITE we could not produce must NEVER fall back to relabeling the OLD
+      // product — that ships "old product with the new name" (the exact bug). Leave
+      // the review/lifestyle image UNCHANGED instead (real photo, old brand stays).
+      if (composite) return { buffer, credits: 0, resultUrl: null, dims, via: 'left-composite-failed', unchanged: true };
+      throw lastErr;
+    }
   }
 
   const finalBuf = await refit(resultBuf, dims);
