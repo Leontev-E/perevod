@@ -6,6 +6,7 @@
 const parse5 = require('parse5');
 const { maskPhp } = require('./extract/mask');
 const { splitDocument } = require('./extract');
+const { langCode } = require('./util/lang');
 
 // Common ISO-3166 alpha-2 set (enough to recognize a country <select>).
 const ISO2 = new Set(('af ax al dz as ad ao ai aq ag ar am aw au at az bs bh bd bb by be bz bj bm bt bo ba bw br bn bg bf bi kh cm ca cv cf td cl cn co km cg cd cr ci hr cu cy cz dk dj dm do ec eg sv gq er ee et fi fr ga gm ge de gh gr gl gt gn gw gy ht hn hk hu is in id ir iq ie il it jm jp jo kz ke kr kw kg la lv lb ls lr ly li lt lu mo mk mg mw my mv ml mt mx md mc mn me ma mz mm na np nl nz ni ne ng no om pk pa py pe ph pl pt qa ro ru rw sa rs sg sk si za es lk sd se ch sy tw tj th tr tm ua ae gb us uy uz ve vn ye zm zw uk').split(' '));
@@ -37,6 +38,18 @@ function adaptForms(content, type, params, localeRules) {
   const nativeName = nativeNameRaw.toLowerCase();
   const prefix = (localeRules && localeRules.phonePrefix) || '';
   const changes = [];
+
+  // Set <html lang> to the target language so a stale source lang (e.g. lang="id"
+  // on a localized-to-Polish page) doesn't trigger the browser's "translate this
+  // page?" prompt. Full documents only; `lang` isn't a STRUCT_ATTR so the gate is fine.
+  const iso = langCode(params.language);
+  if (iso && fullDoc) {
+    let htmlNode = null;
+    (function findHtml(n) { if (htmlNode) return; if (n.tagName === 'html') { htmlNode = n; return; } for (const c of (n.childNodes || [])) findHtml(c); })(doc);
+    if (htmlNode && (getAttr(htmlNode, 'lang') || '').toLowerCase() !== iso.toLowerCase()) {
+      setAttr(htmlNode, 'lang', iso); changes.push('html.lang=' + iso);
+    }
+  }
   // intl-tel-input (or a similar phone widget) OWNS the tel field's value/format.
   // Writing a raw "+prefix" into value/placeholder double-prefixes or corrupts
   // its hidden full-number, so when it's present we ONLY patch initialCountry

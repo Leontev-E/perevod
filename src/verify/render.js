@@ -51,22 +51,15 @@ async function renderCheck(root, shotPath, opts) {
     page.on('pageerror', e => errors.push(String(e && e.message || e).split('\n')[0].slice(0, 140)));
 
     // ── Lead-safety guard, active for the WHOLE session (load + funnel drive +
-    // submit probe), NOT just the final probe. The funnel-driving clicks below can
-    // trigger a real POST on some landings, so the block must be in place BEFORE
-    // page.goto. Two layers: (1) a NETWORK abort of every POST/PUT/PATCH (nothing
-    // can leave the machine no matter how it is triggered — fetch/XHR/sendBeacon/
-    // native form submit); (2) in-page overrides that also CAPTURE the intended
-    // payload and keep app code happy (fetch returns a fake 200).
-    const netCap = [];
+    // submit probe), NOT just the final probe — the funnel clicks below can trigger
+    // a real POST. Implemented purely in-page (evaluateOnNewDocument runs before
+    // every document script) so it needs NO network request interception (which
+    // can hang page/browser close). It CAPTURES the intended payload and BLOCKS the
+    // send on every path a landing uses: fetch (fake 200), XHR (swallowed),
+    // navigator.sendBeacon (swallowed), programmatic form.submit() (swallowed), and
+    // a native submit-button POST (submit event preventDefault). No real lead is
+    // ever sent to the tracker.
     try {
-      await page.setRequestInterception(true);
-      page.on('request', (req) => {
-        try {
-          const m = (req.method() || 'GET').toUpperCase();
-          if (m === 'POST' || m === 'PUT' || m === 'PATCH') { netCap.push({ url: req.url(), method: m, body: (req.postData() || '').slice(0, 3000) }); return req.abort(); }
-          return req.continue();
-        } catch (e) { try { req.continue(); } catch (e2) { /* already handled */ } }
-      });
       await page.evaluateOnNewDocument(() => {
         window.__cap = { posts: [], forms: [] };
         window.fetch = function (u, o) {
@@ -83,7 +76,7 @@ async function renderCheck(root, shotPath, opts) {
           e.preventDefault(); e.stopPropagation();
         }, true);
       });
-    } catch (e) { /* interception unsupported -> probe still best-effort below */ }
+    } catch (e) { /* guard install failed -> probe still best-effort below */ }
 
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
     let bubbles = 0;
@@ -169,7 +162,7 @@ async function renderCheck(root, shotPath, opts) {
     // Submit + GEO probe LAST (it fills & submits the form). Safe: it intercepts
     // and BLOCKS the outgoing POST, so no real lead is ever sent to the tracker.
     let submit = { probed: false };
-    try { submit = await probeSubmit(page, (opts && opts.geo) || '', netCap); } catch { /* best-effort */ }
+    try { submit = await probeSubmit(page, (opts && opts.geo) || ''); } catch { /* best-effort */ }
     return {
       available: true,
       errors: [...new Set(errors)],
@@ -191,7 +184,16 @@ async function renderCheck(root, shotPath, opts) {
     };
   } catch (e) {
     return { available: true, error: String(e && e.message || e) };
-  } finally { try { await browser.close(); } catch {} srv.close(); }
+  } finally {
+    // Robust teardown so a hung close can never leak chromium (leaked processes
+    // accumulate and eventually exhaust the container). Graceful close with a
+    // short timeout, then SIGKILL the browser process outright.
+    if (browser) {
+      try { await Promise.race([browser.close(), new Promise(r => setTimeout(r, 5000))]); } catch (e) { /* noop */ }
+      try { const proc = browser.process && browser.process(); if (proc && !proc.killed) proc.kill('SIGKILL'); } catch (e) { /* noop */ }
+    }
+    try { srv.close(); } catch (e) { /* noop */ }
+  }
 }
 
 // Compare original vs translated render -> verdict.
@@ -213,9 +215,10 @@ function compareRenders(orig, out, opts) {
   const reasons = [];
   if (o.formKit) {
     // With a kit, a funnel-depth change is by design. The semantic probes on
-    // `out` are what actually tell us if the kit is broken:
-    if (formLost) { verdict = 'regression'; reasons.push('formLost'); }
-    // Kit injected but form not found inside it → injector or polish broke it.
+    // `out` are what actually tell us if the kit is broken. NOTE: we do NOT flag
+    // plain `formLost` for a kit — a kit order form is hidden until the game is
+    // played, so "not visible right now" (the auto-drive may not fully reveal it)
+    // is not a lost form. The real "form gone" case is kitFormMissing below.
     if (out.kitInjected && out.kitFormFound === false) { verdict = 'regression'; reasons.push('kitFormMissing'); }
     // Form present but button/input unstyled → kit CSS not scoped/linked.
     if (out.kitFormFound && out.kitBtnStyled === false) { verdict = 'regression'; reasons.push('kitButtonUnstyled'); }
@@ -265,10 +268,10 @@ function compareRenders(orig, out, opts) {
 // tracking sub1..5 + a country/GEO field. CRITICAL: it never lets the request go
 // out (fetch returns a fake 200, XHR.send is swallowed, submit is preventDefault-
 // ed) so running the check can NOT create a fake lead on the real tracker.
-async function probeSubmit(page, geo, netCap) {
+async function probeSubmit(page, geo) {
   // The capture-and-BLOCK guard is already installed for the whole session (see
   // renderCheck). Here we just reveal, fill and submit the lead form, then read
-  // what WOULD have posted (network + in-page captures). No real lead is sent.
+  // what WOULD have posted (in-page captures). No real lead is ever sent.
   try {
     const filled = await page.evaluate(() => {
       const forms = Array.from(document.querySelectorAll('form')).filter(f => f.offsetParent);
@@ -284,7 +287,7 @@ async function probeSubmit(page, geo, netCap) {
     });
     await new Promise(r => setTimeout(r, 1500)); // let an async post fire
     const cap = await page.evaluate(() => window.__cap || { posts: [], forms: [] });
-    const posts = [...(cap.posts || []), ...(netCap || [])]; // in-page + network captures
+    const posts = cap.posts || [];
     const forms = cap.forms || [];
     const payloads = [];
     for (const p of posts) payloads.push((p.url || '') + ' ' + (p.body || ''));

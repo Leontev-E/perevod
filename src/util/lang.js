@@ -109,6 +109,24 @@ const MAP = {
 // Unique language list (for the language datalist in the form).
 const LANGUAGES = [...new Set(Object.values(MAP).map(v => v.language))].sort();
 
+// Language name -> ISO 639-1 code, for the <html lang> attribute (a source page
+// often keeps a stale lang="id"/"en" after its text is localized).
+const LANG_ISO = {
+  'polish': 'pl', 'english': 'en', 'german': 'de', 'spanish': 'es', 'french': 'fr', 'italian': 'it',
+  'portuguese': 'pt', 'dutch': 'nl', 'czech': 'cs', 'slovak': 'sk', 'hungarian': 'hu', 'romanian': 'ro',
+  'bulgarian': 'bg', 'greek': 'el', 'croatian': 'hr', 'serbian': 'sr', 'slovenian': 'sl', 'slovene': 'sl',
+  'finnish': 'fi', 'swedish': 'sv', 'norwegian': 'no', 'danish': 'da', 'lithuanian': 'lt', 'latvian': 'lv',
+  'estonian': 'et', 'ukrainian': 'uk', 'russian': 'ru', 'turkish': 'tr', 'arabic': 'ar', 'hebrew': 'he',
+  'japanese': 'ja', 'korean': 'ko', 'thai': 'th', 'vietnamese': 'vi', 'indonesian': 'id', 'malay': 'ms',
+  'hindi': 'hi', 'chinese': 'zh', 'chinese (traditional)': 'zh-Hant', 'chinese (simplified)': 'zh-Hans',
+  'filipino': 'tl', 'tagalog': 'tl', 'albanian': 'sq', 'macedonian': 'mk', 'bosnian': 'bs', 'georgian': 'ka',
+  'azerbaijani': 'az', 'kazakh': 'kk', 'uzbek': 'uz', 'armenian': 'hy', 'persian': 'fa', 'farsi': 'fa'
+};
+function langCode(language) {
+  const k = String(language || '').trim().toLowerCase();
+  return LANG_ISO[k] || '';
+}
+
 function defaultsFor(cc) {
   const e = MAP[(cc || '').toUpperCase()];
   return e ? { language: e.language, currency: e.currency } : { language: '', currency: '' };
@@ -130,4 +148,4 @@ function langDirective(languageOrParams, script) {
   return `${language} written in the ${nice} script (use ${nice} letters only)`;
 }
 
-module.exports = { defaultsFor, dialCode, langDirective, MAP, LANGUAGES };
+module.exports = { defaultsFor, dialCode, langDirective, langCode, MAP, LANGUAGES, LANG_ISO };
